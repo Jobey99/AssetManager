@@ -1,5 +1,5 @@
 # Stage 1: Build the Vite React Frontend
-FROM node:18-alpine AS frontend-builder
+FROM node:22-alpine AS frontend-builder
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN npm install --legacy-peer-deps
@@ -7,7 +7,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # Stage 2: Build the Node Express Backend and serve
-FROM node:18-alpine
+FROM node:22-alpine
 WORKDIR /app
 COPY server/package*.json ./server/
 RUN cd server && npm install --only=production
