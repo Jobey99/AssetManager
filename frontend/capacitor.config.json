@@ -2,5 +2,9 @@
   "appId": "com.assethub.app",
   "appName": "Asset Hub",
   "webDir": "dist",
-  "bundledWebRuntime": false
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true
+  }
 }
