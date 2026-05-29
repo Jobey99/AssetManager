@@ -752,20 +752,26 @@ function App() {
   }, [currentView, scannerActive, scannedAsset, currentCameraId]);
 
   const stopScanner = () => {
-    if (scannerRef.current) {
-      try {
-        if (scannerRef.current.isScanning) {
-          scannerRef.current.stop().then(() => {
-            console.log("Scanner stopped.");
-          }).catch(e => console.log(e));
-        }
-      } catch (e) {
-        console.log(e);
-      }
+    if (scannerRef.current && scannerRef.current.isScanning) {
+      return scannerRef.current.stop()
+        .then(() => {
+          console.log("Scanner stopped.");
+        })
+        .catch(e => {
+          console.warn("Error stopping scanner:", e);
+        });
     }
+    return Promise.resolve();
   };
 
   const applyAutofocusAndZoom = (html5QrCode, targetZoomValue = null) => {
+    // Reset video transform and state on start
+    const videoEl = document.querySelector('#qr-reader video');
+    if (videoEl) {
+      videoEl.style.transform = 'none';
+    }
+    setScannerZoom(1);
+
     setTimeout(() => {
       try {
         if (!html5QrCode || !html5QrCode.isScanning) return;
@@ -778,7 +784,7 @@ function App() {
             constraints.focusMode = 'continuous';
           }
           
-          const zoomToUse = targetZoomValue !== null ? targetZoomValue : scannerZoom;
+          const zoomToUse = targetZoomValue !== null ? targetZoomValue : 1;
           if (capabilities.zoom && zoomToUse > 1) {
             const minZoom = capabilities.zoom.min || 1;
             const maxZoom = capabilities.zoom.max || 3;
@@ -810,6 +816,17 @@ function App() {
     const nextZoom = scannerZoom === 1 ? 2 : 1;
     setScannerZoom(nextZoom);
     
+    // Apply CSS/Software zoom fallback to make scanning easier on devices without hardware zoom API support
+    const videoEl = document.querySelector('#qr-reader video');
+    if (videoEl) {
+      videoEl.style.transition = 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)';
+      if (nextZoom === 2) {
+        videoEl.style.transform = 'scale(1.5)';
+      } else {
+        videoEl.style.transform = 'none';
+      }
+    }
+
     if (scannerRef.current && scannerRef.current.isScanning) {
       try {
         const track = scannerRef.current.getRunningTrack();
@@ -825,8 +842,6 @@ function App() {
             }).catch(err => {
               console.warn("Failed to toggle zoom constraint:", err);
             });
-          } else {
-            alert("Hardware zoom is not supported on this camera device.");
           }
         }
       } catch (err) {
@@ -843,15 +858,17 @@ function App() {
     const nextIndex = (currentIndex + 1) % availableCameras.length;
     const nextCamera = availableCameras[nextIndex];
     setCurrentCameraId(nextCamera.id);
+    setScanError('');
     
-    // Stop and restart with new ID
-    stopScanner();
-    // Wait a brief moment, then start with the new camera ID
-    setTimeout(() => {
-      if (scannerActive && currentView === 'scanner') {
-        const html5QrCode = new Html5Qrcode("qr-reader");
-        scannerRef.current = html5QrCode;
-        html5QrCode.start(
+    // Await the scanner to fully stop to release device lock
+    await stopScanner();
+    
+    if (scannerActive && currentView === 'scanner') {
+      const html5QrCode = new Html5Qrcode("qr-reader");
+      scannerRef.current = html5QrCode;
+      
+      try {
+        await html5QrCode.start(
           nextCamera.id,
           {
             fps: 10,
@@ -864,14 +881,34 @@ function App() {
             handleAssetScanned(decodedText);
           },
           (errorMessage) => {}
-        ).then(() => {
+        );
+        applyAutofocusAndZoom(html5QrCode);
+      } catch (err) {
+        console.error("Camera switch start failed:", err);
+        setScanError("Failed to switch camera. Trying fallback...");
+        // Fallback: try starting with environment facing mode
+        try {
+          await html5QrCode.start(
+            { facingMode: "environment" },
+            {
+              fps: 10,
+              qrbox: (width, height) => {
+                const size = Math.min(width, height) * 0.7;
+                return { width: size, height: size };
+              }
+            },
+            (decodedText) => {
+              handleAssetScanned(decodedText);
+            },
+            (errorMessage) => {}
+          );
           applyAutofocusAndZoom(html5QrCode);
-        }).catch(err => {
-          console.error("Camera fail:", err);
-          setScanError("Failed to switch camera.");
-        });
+        } catch (fallbackErr) {
+          console.error("Camera switch fallback failed:", fallbackErr);
+          setScanError("Failed to switch camera. Make sure permissions are granted.");
+        }
       }
-    }, 300);
+    }
   };
 
   const extractAssetId = (text) => {
@@ -2902,7 +2939,7 @@ function App() {
                             <div className="scanner-laser"></div>
                           </div>
                         </div>
-                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginTop: '16px' }}>
+                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', marginTop: '16px', flexWrap: 'wrap' }}>
                           <button 
                             className="btn btn-secondary" 
                             onClick={() => setScannerActive(false)}
