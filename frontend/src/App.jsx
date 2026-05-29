@@ -1085,17 +1085,6 @@ function App() {
             updatedAssetsList = assets.map(a => a.id === targetAssetId ? updatedAsset : a);
           }
 
-          // Recalculate status globally for all items in the matching group in local state
-          const targetKey = (asset.sku && asset.sku.trim() !== '') ? `sku:${asset.sku.trim().toLowerCase()}` : `name:${asset.name.trim().toLowerCase()}`;
-          const globalStatus = getGlobalStatus(asset.name, asset.sku, updatedAssetsList);
-          
-          updatedAssetsList = updatedAssetsList.map(a => {
-            const aKey = (a.sku && a.sku.trim() !== '') ? `sku:${a.sku.trim().toLowerCase()}` : `name:${a.name.trim().toLowerCase()}`;
-            if (aKey === targetKey) {
-              return { ...a, status: globalStatus };
-            }
-            return a;
-          });
 
           setAssets(updatedAssetsList);
           localStorage.setItem('cached_assets', JSON.stringify(updatedAssetsList));
@@ -1204,18 +1193,6 @@ function App() {
         
         let updatedAssetsList = assets.map(a => a.id === asset.id ? updatedAsset : a);
         
-        // Recalculate status globally for all items in the matching group in local state
-        const targetKey = (asset.sku && asset.sku.trim() !== '') ? `sku:${asset.sku.trim().toLowerCase()}` : `name:${asset.name.trim().toLowerCase()}`;
-        const globalStatus = getGlobalStatus(asset.name, asset.sku, updatedAssetsList);
-        
-        updatedAssetsList = updatedAssetsList.map(a => {
-          const aKey = (a.sku && a.sku.trim() !== '') ? `sku:${a.sku.trim().toLowerCase()}` : `name:${a.name.trim().toLowerCase()}`;
-          if (aKey === targetKey) {
-            return { ...a, status: globalStatus };
-          }
-          return a;
-        });
-
         setAssets(updatedAssetsList);
         localStorage.setItem('cached_assets', JSON.stringify(updatedAssetsList));
         
@@ -1246,19 +1223,7 @@ function App() {
     return 'Available';
   };
 
-  // Helper to get status globally for a SKU/Name group in the frontend state
-  const getGlobalStatus = (assetName, assetSku, localAssets = assets) => {
-    const key = (assetSku && assetSku.trim() !== '') ? `sku:${assetSku.trim().toLowerCase()}` : `name:${assetName.trim().toLowerCase()}`;
-    const matches = localAssets.filter(a => {
-      const matchKey = (a.sku && a.sku.trim() !== '') ? `sku:${a.sku.trim().toLowerCase()}` : `name:${a.name.trim().toLowerCase()}`;
-      return matchKey === key;
-    });
-    
-    const totalQty = matches.reduce((sum, item) => sum + item.quantity, 0);
-    const maxMinQty = matches.reduce((max, item) => Math.max(max, item.min_quantity || 0), 0);
-    
-    return calculateStatus(totalQty, maxMinQty);
-  };
+
 
   // Export label details as high quality image
   const downloadLabelImage = async (asset) => {
@@ -2252,7 +2217,13 @@ function App() {
                             <span className="feed-highlight">{tx.user_name}</span> {actionText} {absoluteQty} {tx.asset_name ? tx.asset_name : 'deleted item'}
                           </p>
                           <p className="feed-notes">
-                            {tx.type === 'CHECK_OUT' ? `Moved to ${tx.location_name || 'custom location'}` : tx.notes || 'No description notes'}
+                            {tx.notes ? tx.notes : (
+                              tx.type === 'CHECK_OUT' || tx.type === 'SALE'
+                                ? `Withdrawn from ${tx.location_name || 'inventory'}`
+                                : tx.type === 'CHECK_IN' || tx.type === 'PURCHASE'
+                                  ? `Added to ${tx.location_name || 'inventory'}`
+                                  : 'No description notes'
+                            )}
                           </p>
                           <span className="feed-time">
                             {new Date(tx.created_at).toLocaleString()}
