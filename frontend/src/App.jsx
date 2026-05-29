@@ -27,12 +27,22 @@ import {
 import { Html5Qrcode } from 'html5-qrcode';
 import QRCode from 'qrcode';
 
+const DEFAULT_SERVER_URL = 'https://assets.josh-green.uk';
+
 const getApiBase = () => {
   const stored = localStorage.getItem('server_api_url');
-  if (stored) return `${stored}/api`;
-  if (window.location.hostname === 'localhost' && !window.location.port) {
-    return 'http://localhost:5000/api';
+  if (stored) {
+    return stored.endsWith('/api') ? stored : `${stored}/api`;
   }
+  
+  // If running in Capacitor / native webview, default to the production backend server IP/URL
+  const isNative = window.location.protocol === 'file:' || 
+                   (window.location.hostname === 'localhost' && !window.location.port) ||
+                   window.location.hostname.includes('capacitor');
+  if (isNative) {
+    return `${DEFAULT_SERVER_URL}/api`;
+  }
+  
   return import.meta.env.DEV ? 'http://localhost:5000/api' : '/api';
 };
 
@@ -134,6 +144,11 @@ function App() {
   const [searchQ, setSearchQ] = useState('');
   const [locationFilter, setLocationFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
+
+  // Sorting
+  const [sortField, setSortField] = useState('name');
+  const [sortOrder, setSortOrder] = useState('asc');
 
   // Active Asset Drawer
   const [activeAsset, setActiveAsset] = useState(null);
@@ -636,120 +651,127 @@ function App() {
   const isAdmin = currentUser?.role === 'Admin';
 
   // Scanner Logic
+  // Scanner Logic
   useEffect(() => {
-    if (currentView === 'scanner' && scannerActive && !scannedAsset) {
-      const html5QrCode = new Html5Qrcode("qr-reader");
-      scannerRef.current = html5QrCode;
-      setScanError('');
+    let isMounted = true;
+    let qrCode = null;
 
-      const startWithFallback = () => {
-        html5QrCode.start(
-          { facingMode: "environment" },
-          {
-            fps: 10,
-            qrbox: (width, height) => {
-              const size = Math.min(width, height) * 0.7;
-              return { width: size, height: size };
-            }
-          },
-          (decodedText) => {
-            handleAssetScanned(decodedText);
-          },
-          (errorMessage) => {}
-        ).then(() => {
-          applyAutofocusAndZoom(html5QrCode);
-        }).catch(err => {
-          console.error("Camera fail:", err);
-          setScanError("Unable to access camera. Make sure camera permissions are enabled, or use the manual entry field below.");
-        });
-      };
+    const startScannerInstance = async () => {
+      if (currentView === 'scanner' && scannerActive && !scannedAsset) {
+        setScanError('');
+        
+        const container = document.getElementById("qr-reader");
+        if (!container) return;
 
-      if (currentCameraId) {
-        // If we already have a selected camera ID from a previous switch or load
-        html5QrCode.start(
-          currentCameraId,
-          {
-            fps: 10,
-            qrbox: (width, height) => {
-              const size = Math.min(width, height) * 0.7;
-              return { width: size, height: size };
-            }
-          },
-          (decodedText) => {
-            handleAssetScanned(decodedText);
-          },
-          (errorMessage) => {}
-        ).then(() => {
-          applyAutofocusAndZoom(html5QrCode);
-        }).catch(err => {
-          console.warn("Starting with selected camera failed, trying fallback:", err);
-          startWithFallback();
-        });
-      } else {
-        // First-time load: search for best back camera
-        Html5Qrcode.getCameras().then(devices => {
-          if (devices && devices.length > 0) {
-            setAvailableCameras(devices);
-            
-            // Find back cameras
-            const backCameras = devices.filter(device => {
-              const label = device.label.toLowerCase();
-              return label.includes('back') || label.includes('rear') || label.includes('environment') || label.includes('main');
-            });
-
-            let selectedCameraId = null;
-            if (backCameras.length > 0) {
-              // Try to skip macro, ultra, wide, 0.6x, depth, zoom
-              const mainBackCamera = backCameras.find(device => {
-                const label = device.label.toLowerCase();
-                return !label.includes('wide') && 
-                       !label.includes('ultra') && 
-                       !label.includes('0.6') && 
-                       !label.includes('macro') && 
-                       !label.includes('depth') &&
-                       !label.includes('zoom');
-              });
-              selectedCameraId = mainBackCamera ? mainBackCamera.id : backCameras[0].id;
-            } else {
-              // Default to last device in list (often main rear camera on mobile)
-              selectedCameraId = devices[devices.length - 1].id;
-            }
-
-            setCurrentCameraId(selectedCameraId);
-
-            html5QrCode.start(
-              selectedCameraId,
-              {
-                fps: 10,
-                qrbox: (width, height) => {
-                  const size = Math.min(width, height) * 0.7;
-                  return { width: size, height: size };
-                }
-              },
-              (decodedText) => {
-                handleAssetScanned(decodedText);
-              },
-              (errorMessage) => {}
-            ).then(() => {
-              applyAutofocusAndZoom(html5QrCode);
-            }).catch(err => {
-              console.warn("Start with selected camera failed, trying fallback:", err);
-              startWithFallback();
-            });
-          } else {
-            startWithFallback();
+        if (!scannerRef.current) {
+          try {
+            scannerRef.current = new Html5Qrcode("qr-reader");
+          } catch (e) {
+            console.error("Failed to create Html5Qrcode:", e);
+            return;
           }
-        }).catch(err => {
-          console.warn("Error getting cameras list, trying fallback:", err);
-          startWithFallback();
-        });
+        }
+        
+        qrCode = scannerRef.current;
+        
+        if (qrCode.isScanning) {
+          return; // Already running
+        }
+
+        const successCallback = (decodedText) => {
+          if (isMounted) handleAssetScanned(decodedText);
+        };
+        const errorCallback = (errorMessage) => {};
+        const config = {
+          fps: 10,
+          qrbox: (width, height) => {
+            const size = Math.min(width, height) * 0.7;
+            return { width: size, height: size };
+          }
+        };
+
+        const startWithFallback = async () => {
+          try {
+            await qrCode.start({ facingMode: "environment" }, config, successCallback, errorCallback);
+            if (isMounted) applyAutofocusAndZoom(qrCode);
+          } catch (err) {
+            console.error("Camera fallback failed:", err);
+            if (isMounted) setScanError("Unable to access camera. Make sure camera permissions are enabled.");
+          }
+        };
+
+        if (currentCameraId) {
+          try {
+            await qrCode.start(currentCameraId, config, successCallback, errorCallback);
+            if (isMounted) applyAutofocusAndZoom(qrCode);
+          } catch (err) {
+            console.warn("Starting with selected camera failed, trying fallback:", err);
+            await startWithFallback();
+          }
+        } else {
+          try {
+            const devices = await Html5Qrcode.getCameras();
+            if (!isMounted) return;
+            if (devices && devices.length > 0) {
+              setAvailableCameras(devices);
+              
+              const backCameras = devices.filter(device => {
+                const label = device.label.toLowerCase();
+                return label.includes('back') || label.includes('rear') || label.includes('environment') || label.includes('main');
+              });
+
+              let selectedId = null;
+              if (backCameras.length > 0) {
+                const mainBack = backCameras.find(device => {
+                  const label = device.label.toLowerCase();
+                  return !label.includes('wide') && 
+                         !label.includes('ultra') && 
+                         !label.includes('0.6') && 
+                         !label.includes('macro') && 
+                         !label.includes('depth') &&
+                         !label.includes('zoom');
+                });
+                selectedId = mainBack ? mainBack.id : backCameras[0].id;
+              } else {
+                selectedId = devices[devices.length - 1].id;
+              }
+
+              setCurrentCameraId(selectedId);
+              
+              await qrCode.start(selectedId, config, successCallback, errorCallback);
+              if (isMounted) applyAutofocusAndZoom(qrCode);
+            } else {
+              await startWithFallback();
+            }
+          } catch (err) {
+            console.warn("Error getting cameras list, trying fallback:", err);
+            await startWithFallback();
+          }
+        }
       }
-    }
+    };
+
+    startScannerInstance();
 
     return () => {
-      stopScanner();
+      isMounted = false;
+      if (qrCode) {
+        if (qrCode.isScanning) {
+          qrCode.stop().then(() => {
+            try { qrCode.clear(); } catch(e) {}
+            if (scannerRef.current === qrCode) {
+              scannerRef.current = null;
+            }
+          }).catch(e => console.log("Cleanup stop error:", e));
+        } else {
+          try { qrCode.clear(); } catch(e) {}
+          if (scannerRef.current === qrCode) {
+            scannerRef.current = null;
+          }
+        }
+      }
     };
-  }, [currentView, scannerActive, scannedAsset, currentCameraId]);
+  }, [currentView, scannerActive, scannedAsset]);
 
   const stopScanner = () => {
     if (scannerRef.current && scannerRef.current.isScanning) {
@@ -779,9 +801,10 @@ function App() {
         if (track) {
           const capabilities = track.getCapabilities ? track.getCapabilities() : {};
           const constraints = {};
+          const advancedConstraints = [];
           
           if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
-            constraints.focusMode = 'continuous';
+            advancedConstraints.push({ focusMode: 'continuous' });
           }
           
           const zoomToUse = targetZoomValue !== null ? targetZoomValue : 1;
@@ -790,26 +813,30 @@ function App() {
             const maxZoom = capabilities.zoom.max || 3;
             const finalZoom = Math.min(zoomToUse, maxZoom);
             if (finalZoom >= minZoom) {
-              constraints.advanced = [{ zoom: finalZoom }];
+              advancedConstraints.push({ zoom: finalZoom });
             }
           }
           
-          if (Object.keys(constraints).length > 0 || constraints.advanced) {
+          if (advancedConstraints.length > 0) {
+            constraints.advanced = advancedConstraints;
+          }
+          
+          if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
+            constraints.focusMode = 'continuous';
+          }
+          
+          if (Object.keys(constraints).length > 0) {
             html5QrCode.applyVideoConstraints(constraints)
               .then(() => console.log("Applied camera constraints:", constraints))
               .catch(err => {
                 console.warn("Failed to apply camera constraints:", err);
-                if (constraints.focusMode) {
-                  html5QrCode.applyVideoConstraints({ focusMode: 'continuous' })
-                    .catch(e => console.warn("Failed fallback focus constraint:", e));
-                }
               });
           }
         }
       } catch (err) {
         console.warn("Error in applyAutofocusAndZoom:", err);
       }
-    }, 1200);
+    }, 1500);
   };
 
   const toggleZoom = () => {
@@ -853,23 +880,47 @@ function App() {
 
 
   const handleCameraSwitch = async () => {
-    if (availableCameras.length <= 1 || !scannerRef.current) return;
+    if (availableCameras.length <= 1 || !scannerRef.current || !scannerRef.current.isScanning) return;
     const currentIndex = availableCameras.findIndex(d => d.id === currentCameraId);
     const nextIndex = (currentIndex + 1) % availableCameras.length;
     const nextCamera = availableCameras[nextIndex];
-    setCurrentCameraId(nextCamera.id);
+    
     setScanError('');
-    
-    // Await the scanner to fully stop to release device lock
-    await stopScanner();
-    
-    if (scannerActive && currentView === 'scanner') {
-      const html5QrCode = new Html5Qrcode("qr-reader");
-      scannerRef.current = html5QrCode;
+    const qrCode = scannerRef.current;
+
+    try {
+      // 1. Stop current scan stream to unlock camera hardware
+      await qrCode.stop();
+      console.log("Scanner stopped successfully for camera switch.");
+    } catch (e) {
+      console.warn("Failed to stop scanner during switch:", e);
+    }
+
+    // 2. Start the scanner with the new camera ID on the same instance
+    try {
+      const config = {
+        fps: 10,
+        qrbox: (width, height) => {
+          const size = Math.min(width, height) * 0.7;
+          return { width: size, height: size };
+        }
+      };
+      const successCallback = (decodedText) => {
+        handleAssetScanned(decodedText);
+      };
+      const errorCallback = (errorMessage) => {};
+
+      await qrCode.start(nextCamera.id, config, successCallback, errorCallback);
+      setCurrentCameraId(nextCamera.id);
+      applyAutofocusAndZoom(qrCode);
+    } catch (err) {
+      console.error("Camera switch to next camera failed:", err);
+      setScanError("Failed to switch camera. Reverting to auto environment camera...");
       
+      // Fallback: try starting with environment facing mode
       try {
-        await html5QrCode.start(
-          nextCamera.id,
+        await qrCode.start(
+          { facingMode: "environment" },
           {
             fps: 10,
             qrbox: (width, height) => {
@@ -882,31 +933,10 @@ function App() {
           },
           (errorMessage) => {}
         );
-        applyAutofocusAndZoom(html5QrCode);
-      } catch (err) {
-        console.error("Camera switch start failed:", err);
-        setScanError("Failed to switch camera. Trying fallback...");
-        // Fallback: try starting with environment facing mode
-        try {
-          await html5QrCode.start(
-            { facingMode: "environment" },
-            {
-              fps: 10,
-              qrbox: (width, height) => {
-                const size = Math.min(width, height) * 0.7;
-                return { width: size, height: size };
-              }
-            },
-            (decodedText) => {
-              handleAssetScanned(decodedText);
-            },
-            (errorMessage) => {}
-          );
-          applyAutofocusAndZoom(html5QrCode);
-        } catch (fallbackErr) {
-          console.error("Camera switch fallback failed:", fallbackErr);
-          setScanError("Failed to switch camera. Make sure permissions are granted.");
-        }
+        applyAutofocusAndZoom(qrCode);
+      } catch (fallbackErr) {
+        console.error("Camera switch fallback failed:", fallbackErr);
+        setScanError("Failed to switch camera. Make sure permissions are granted.");
       }
     }
   };
@@ -1835,7 +1865,7 @@ function App() {
             <div className="login-logo">
               <Package size={36} />
             </div>
-            <h1 className="login-title">Asset Hub</h1>
+            <h1 className="login-title">Zavi Asset Hub</h1>
             <p className="login-subtitle">Sign in to manage stock and garages</p>
           </div>
 
@@ -1942,6 +1972,102 @@ function App() {
       )
     : [];
 
+  const handleSort = (field) => {
+    if (sortField === field) {
+      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortOrder('asc');
+    }
+  };
+
+  const renderSortIndicator = (field) => {
+    if (sortField !== field) return ' ⇅';
+    return sortOrder === 'asc' ? ' ▲' : ' ▼';
+  };
+
+  const allCategories = React.useMemo(() => {
+    const cats = new Set(assets.map(a => a.category || 'Uncategorized'));
+    return Array.from(cats).sort();
+  }, [assets]);
+
+  const filteredAndSortedAssets = React.useMemo(() => {
+    return assets
+      .filter(a => {
+        const matchesSearch = 
+          a.name.toLowerCase().includes(searchQ.toLowerCase()) ||
+          (a.sku && a.sku.toLowerCase().includes(searchQ.toLowerCase())) ||
+          (a.category && a.category.toLowerCase().includes(searchQ.toLowerCase())) ||
+          a.id.toLowerCase().includes(searchQ.toLowerCase());
+        
+        const matchesLocation = locationFilter === '' || Number(a.location_id) === Number(locationFilter);
+        const matchesStatus = statusFilter === '' || a.status === statusFilter;
+        const matchesCategory = categoryFilter === '' || (a.category || 'Uncategorized') === categoryFilter;
+        
+        return matchesSearch && matchesLocation && matchesStatus && matchesCategory;
+      })
+      .sort((a, b) => {
+        let valA, valB;
+        switch (sortField) {
+          case 'sku':
+            valA = (a.sku || '').toLowerCase();
+            valB = (b.sku || '').toLowerCase();
+            break;
+          case 'name':
+            valA = a.name.toLowerCase();
+            valB = b.name.toLowerCase();
+            break;
+          case 'category':
+            valA = (a.category || 'Uncategorized').toLowerCase();
+            valB = (b.category || 'Uncategorized').toLowerCase();
+            break;
+          case 'location':
+            valA = (a.location_name || 'Unassigned').toLowerCase();
+            valB = (b.location_name || 'Unassigned').toLowerCase();
+            break;
+          case 'quantity':
+            valA = a.quantity;
+            valB = b.quantity;
+            break;
+          case 'status':
+            const statusRank = { 'Out of Stock': 0, 'Low Stock': 1, 'Available': 2 };
+            valA = statusRank[a.status] !== undefined ? statusRank[a.status] : 99;
+            valB = statusRank[b.status] !== undefined ? statusRank[b.status] : 99;
+            break;
+          default:
+            return 0;
+        }
+        if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
+        if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
+        return 0;
+      });
+  }, [assets, searchQ, locationFilter, statusFilter, categoryFilter, sortField, sortOrder]);
+
+  const topActiveItems = React.useMemo(() => {
+    const counts = {};
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    transactions.forEach(tx => {
+      const txDate = new Date(tx.created_at);
+      if (txDate < sevenDaysAgo) return;
+
+      const assetId = tx.asset_id;
+      const assetName = tx.asset_name || assets.find(a => a.id === assetId)?.name || `Item #${assetId}`;
+      const change = Math.abs(tx.quantity_change);
+      
+      if (!counts[assetId]) {
+        counts[assetId] = { id: assetId, name: assetName, totalMoved: 0, count: 0 };
+      }
+      counts[assetId].totalMoved += change;
+      counts[assetId].count += 1;
+    });
+    
+    return Object.values(counts)
+      .sort((a, b) => b.totalMoved - a.totalMoved)
+      .slice(0, 5);
+  }, [transactions, assets]);
+
   return (
     <div className="app-container">
       {renderConnectionErrorModal()}
@@ -1949,8 +2075,8 @@ function App() {
       {/* ----------------- SIDEBAR NAV (Desktop) ----------------- */}
       <nav className="sidebar">
         <div className="logo-container">
-          <div className="logo-icon">H</div>
-          <span className="logo-text">Asset Hub</span>
+          <div className="logo-icon">Z</div>
+          <span className="logo-text">Zavi Asset Hub</span>
         </div>
         
         <ul className="nav-menu">
@@ -1966,7 +2092,14 @@ function App() {
             onClick={() => { setCurrentView('assets'); stopScanner(); }}
           >
             <Package size={18} />
-            <span>Inventory</span>
+            <span style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+              Inventory
+              {lowStockCount > 0 && (
+                <span className="badge badge-danger" style={{ marginLeft: 'auto', padding: '2px 6px', fontSize: '0.75rem', borderRadius: '10px', minWidth: '16px', textAlign: 'center' }}>
+                  {lowStockCount}
+                </span>
+              )}
+            </span>
           </li>
           <li 
             className={`nav-item ${currentView === 'scanner' ? 'active' : ''}`}
@@ -1982,13 +2115,15 @@ function App() {
             <MapPin size={18} />
             <span>Garages & Locations</span>
           </li>
-          <li 
-            className={`nav-item ${currentView === 'users' ? 'active' : ''}`}
-            onClick={() => { setCurrentView('users'); stopScanner(); }}
-          >
-            <Users size={18} />
-            <span>Team & Users</span>
-          </li>
+          {isAdmin && (
+            <li 
+              className={`nav-item ${currentView === 'users' ? 'active' : ''}`}
+              onClick={() => { setCurrentView('users'); stopScanner(); }}
+            >
+              <Users size={18} />
+              <span>Team & Users</span>
+            </li>
+          )}
           <li 
             className={`nav-item ${currentView === 'printer' ? 'active' : ''}`}
             onClick={() => { setCurrentView('printer'); stopScanner(); }}
@@ -2067,9 +2202,14 @@ function App() {
           <History />
           <span>Hub</span>
         </div>
-        <div className={`mobile-nav-item ${currentView === 'assets' ? 'active' : ''}`} onClick={() => { setCurrentView('assets'); stopScanner(); }}>
+        <div className={`mobile-nav-item ${currentView === 'assets' ? 'active' : ''}`} onClick={() => { setCurrentView('assets'); stopScanner(); }} style={{ position: 'relative' }}>
           <Package />
           <span>Items</span>
+          {lowStockCount > 0 && (
+            <span className="badge badge-danger" style={{ position: 'absolute', top: '4px', right: '18px', padding: '2px 5px', fontSize: '0.65rem', borderRadius: '50%', minWidth: '12px', height: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: 0 }}>
+              {lowStockCount}
+            </span>
+          )}
         </div>
         <div className={`mobile-nav-item ${currentView === 'scanner' ? 'active' : ''}`} onClick={() => { setCurrentView('scanner'); setScannerActive(true); setScannedAsset(null); }}>
           <QrCode />
@@ -2219,6 +2359,41 @@ function App() {
                 )}
               </div>
 
+              {/* Top Moving Parts Widget */}
+              <div className="panel" style={{ marginTop: '24px' }}>
+                <div className="panel-header">
+                  <h3 className="panel-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <History size={18} style={{ color: 'var(--accent-teal)' }} /> 🏆 Top Moving Parts (Past 7 Days)
+                  </h3>
+                </div>
+                {topActiveItems.length === 0 ? (
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No transaction history found to calculate top parts.</p>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    {topActiveItems.map((item, idx) => {
+                      const maxMoved = Math.max(...topActiveItems.map(i => i.totalMoved)) || 1;
+                      const percentage = Math.min(100, Math.round((item.totalMoved / maxMoved) * 100));
+                      
+                      return (
+                        <div key={item.id} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.9rem' }}>
+                            <span style={{ fontWeight: '600', color: 'white' }}>
+                              #{idx + 1} {item.name}
+                            </span>
+                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                              <strong>{item.totalMoved}</strong> units moved ({item.count} updates)
+                            </span>
+                          </div>
+                          <div style={{ width: '100%', height: '8px', backgroundColor: 'var(--bg-app)', borderRadius: '4px', overflow: 'hidden' }}>
+                            <div style={{ width: `${percentage}%`, height: '100%', backgroundColor: idx === 0 ? 'var(--accent-teal)' : idx === 1 ? 'var(--accent-indigo)' : 'var(--text-secondary)', borderRadius: '4px' }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
               {/* Right Column: Global Activity Log */}
               <div className="panel">
                 <div className="panel-header">
@@ -2333,8 +2508,20 @@ function App() {
                 <option value="Out of Stock">Out of Stock</option>
               </select>
 
-              {(searchQ || locationFilter || statusFilter) && (
-                <button className="btn btn-secondary" style={{ padding: '8px 12px' }} onClick={() => { setSearchQ(''); setLocationFilter(''); setStatusFilter(''); }}>
+              <select 
+                className="form-control" 
+                style={{ width: 'auto', minWidth: '160px' }}
+                value={categoryFilter}
+                onChange={(e) => setCategoryFilter(e.target.value)}
+              >
+                <option value="">All Categories</option>
+                {allCategories.map(cat => (
+                  <option key={cat} value={cat}>{cat}</option>
+                ))}
+              </select>
+
+              {(searchQ || locationFilter || statusFilter || categoryFilter) && (
+                <button className="btn btn-secondary" style={{ padding: '8px 12px' }} onClick={() => { setSearchQ(''); setLocationFilter(''); setStatusFilter(''); setCategoryFilter(''); }}>
                   Clear Filters
                 </button>
               )}
@@ -2347,28 +2534,17 @@ function App() {
                   <table className="custom-table">
                     <thead>
                       <tr>
-                        <th>QR Code / SKU</th>
-                        <th>Asset Name</th>
-                        <th>Garage Location</th>
-                        <th>Stock Level</th>
-                        <th>Status</th>
+                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('sku')}>QR ID / SKU{renderSortIndicator('sku')}</th>
+                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('name')}>Asset Name{renderSortIndicator('name')}</th>
+                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('category')}>Category{renderSortIndicator('category')}</th>
+                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('location')}>Garage Location{renderSortIndicator('location')}</th>
+                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('quantity')}>Stock Level{renderSortIndicator('quantity')}</th>
+                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort('status')}>Status{renderSortIndicator('status')}</th>
                         <th style={{ textAlign: 'right' }}>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {assets
-                        .filter(a => {
-                          const matchesSearch = 
-                            a.name.toLowerCase().includes(searchQ.toLowerCase()) ||
-                            (a.sku && a.sku.toLowerCase().includes(searchQ.toLowerCase())) ||
-                            a.id.toLowerCase().includes(searchQ.toLowerCase());
-                          
-                          const matchesLocation = locationFilter === '' || Number(a.location_id) === Number(locationFilter);
-                          const matchesStatus = statusFilter === '' || a.status === statusFilter;
-                          
-                          return matchesSearch && matchesLocation && matchesStatus;
-                        })
-                        .map(a => {
+                      {filteredAndSortedAssets.map(a => {
                           const isInPrintQueue = printQueue.some(item => item.id === a.id);
                           return (
                             <tr 
@@ -2386,6 +2562,11 @@ function App() {
                                 </div>
                                 <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                                   {a.description ? (a.description.length > 60 ? a.description.substring(0, 60) + '...' : a.description) : 'No description'}
+                                </span>
+                              </td>
+                              <td style={{ fontWeight: '500' }}>
+                                <span className="badge badge-secondary" style={{ background: 'rgba(255, 255, 255, 0.08)', color: 'var(--text-secondary)' }}>
+                                  {a.category || 'Uncategorized'}
                                 </span>
                               </td>
                               <td>{a.location_name || <span style={{ color: 'var(--text-muted)' }}>Unassigned</span>}</td>
@@ -2466,19 +2647,7 @@ function App() {
 
             <div className="mobile-only-view">
               <div className="mobile-assets-list">
-                {assets
-                  .filter(a => {
-                    const matchesSearch = 
-                      a.name.toLowerCase().includes(searchQ.toLowerCase()) ||
-                      (a.sku && a.sku.toLowerCase().includes(searchQ.toLowerCase())) ||
-                      a.id.toLowerCase().includes(searchQ.toLowerCase());
-                    
-                    const matchesLocation = locationFilter === '' || Number(a.location_id) === Number(locationFilter);
-                    const matchesStatus = statusFilter === '' || a.status === statusFilter;
-                    
-                    return matchesSearch && matchesLocation && matchesStatus;
-                  })
-                  .map(a => {
+                {filteredAndSortedAssets.map(a => {
                     const isInPrintQueue = printQueue.some(item => item.id === a.id);
                     return (
                       <div 
@@ -2505,6 +2674,10 @@ function App() {
                         </div>
                         
                         <div className="mobile-asset-card-body">
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '0.85rem' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Category:</span>
+                            <strong style={{ color: 'white' }}>{a.category || 'Uncategorized'}</strong>
+                          </div>
                           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '0.85rem' }}>
                             <span style={{ color: 'var(--text-secondary)' }}>Location:</span>
                             <strong style={{ color: 'white' }}>{a.location_name || 'Unassigned'}</strong>
@@ -2619,13 +2792,13 @@ function App() {
                         />
                       </div>
                       <div className="form-group">
-                        <label className="form-label">Unit of Measure</label>
+                        <label className="form-label">Category</label>
                         <input 
                           type="text" 
                           className="form-control" 
-                          placeholder="pcs, meters, boxes"
-                          value={newAsset.unit}
-                          onChange={(e) => setNewAsset({ ...newAsset, unit: e.target.value })}
+                          placeholder="e.g. Cables, Tools, Components"
+                          value={newAsset.category}
+                          onChange={(e) => setNewAsset({ ...newAsset, category: e.target.value })}
                         />
                       </div>
                     </div>
@@ -2642,6 +2815,19 @@ function App() {
                         />
                       </div>
                       <div className="form-group">
+                        <label className="form-label">Unit of Measure</label>
+                        <input 
+                          type="text" 
+                          className="form-control" 
+                          placeholder="pcs, meters, boxes"
+                          value={newAsset.unit}
+                          onChange={(e) => setNewAsset({ ...newAsset, unit: e.target.value })}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="form-row">
+                      <div className="form-group">
                         <label className="form-label">Minimum Stock Alert</label>
                         <input 
                           type="number" 
@@ -2651,20 +2837,19 @@ function App() {
                           onChange={(e) => setNewAsset({ ...newAsset, min_quantity: parseInt(e.target.value, 10) || 0 })}
                         />
                       </div>
-                    </div>
-
-                    <div className="form-group">
-                      <label className="form-label">Warehouse / Garage Location</label>
-                      <select 
-                        className="form-control" 
-                        value={newAsset.location_id}
-                        onChange={(e) => setNewAsset({ ...newAsset, location_id: e.target.value })}
-                      >
-                        <option value="">Unassigned Location</option>
-                        {locations.map(l => (
-                          <option key={l.id} value={l.id}>{l.name}</option>
-                        ))}
-                      </select>
+                      <div className="form-group">
+                        <label className="form-label">Warehouse / Garage Location</label>
+                        <select 
+                          className="form-control" 
+                          value={newAsset.location_id}
+                          onChange={(e) => setNewAsset({ ...newAsset, location_id: e.target.value })}
+                        >
+                          <option value="">Unassigned Location</option>
+                          {locations.map(l => (
+                            <option key={l.id} value={l.id}>{l.name}</option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
 
                     <div className="form-group">
@@ -2729,6 +2914,18 @@ function App() {
                         />
                       </div>
                       <div className="form-group">
+                        <label className="form-label">Category</label>
+                        <input 
+                          type="text" 
+                          className="form-control" 
+                          value={editingAsset.category || ''}
+                          onChange={(e) => setEditingAsset({ ...editingAsset, category: e.target.value })}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="form-row">
+                      <div className="form-group">
                         <label className="form-label">Unit of Measure</label>
                         <input 
                           type="text" 
@@ -2737,9 +2934,6 @@ function App() {
                           onChange={(e) => setEditingAsset({ ...editingAsset, unit: e.target.value })}
                         />
                       </div>
-                    </div>
-
-                    <div className="form-row">
                       <div className="form-group">
                         <label className="form-label">Minimum Stock Alert</label>
                         <input 
@@ -2750,19 +2944,20 @@ function App() {
                           onChange={(e) => setEditingAsset({ ...editingAsset, min_quantity: parseInt(e.target.value, 10) || 0 })}
                         />
                       </div>
-                      <div className="form-group">
-                        <label className="form-label">Warehouse / Garage Location</label>
-                        <select 
-                          className="form-control" 
-                          value={editingAsset.location_id || ''}
-                          onChange={(e) => setEditingAsset({ ...editingAsset, location_id: e.target.value || null })}
-                        >
-                          <option value="">Unassigned Location</option>
-                          {locations.map(l => (
-                            <option key={l.id} value={l.id}>{l.name}</option>
-                          ))}
-                        </select>
-                      </div>
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label">Warehouse / Garage Location</label>
+                      <select 
+                        className="form-control" 
+                        value={editingAsset.location_id || ''}
+                        onChange={(e) => setEditingAsset({ ...editingAsset, location_id: e.target.value || null })}
+                      >
+                        <option value="">Unassigned Location</option>
+                        {locations.map(l => (
+                          <option key={l.id} value={l.id}>{l.name}</option>
+                        ))}
+                      </select>
                     </div>
 
                     <div className="form-group">
@@ -3092,7 +3287,7 @@ function App() {
         )}
 
         {/* ----------------- VIEW: USERS MANAGER ----------------- */}
-        {currentView === 'users' && (
+        {currentView === 'users' && isAdmin && (
           <div>
             <div className="page-header">
               <div className="page-title-group">
@@ -3490,6 +3685,44 @@ function App() {
                         </small>
                       </div>
                     </div>
+
+                    {/* Default Mobile App Server Connection URL */}
+                    <div className="panel" style={{ marginTop: '24px' }}>
+                      <div className="panel-header">
+                        <h3 className="panel-title"><ArrowLeftRight size={18} /> Mobile App Connection URL</h3>
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Default Server IP / URL</label>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <input 
+                            type="text" 
+                            className="form-control" 
+                            value={serverInput}
+                            onChange={(e) => setServerInput(e.target.value)}
+                            placeholder="e.g. https://assets.josh-green.uk"
+                          />
+                          <button 
+                            className="btn btn-secondary" 
+                            type="button" 
+                            onClick={() => {
+                              let formattedUrl = serverInput.trim().replace(/\/$/, "");
+                              if (formattedUrl && !/^https?:\/\//i.test(formattedUrl)) {
+                                formattedUrl = "http://" + formattedUrl;
+                              }
+                              localStorage.setItem('server_api_url', formattedUrl);
+                              setServerUrl(formattedUrl);
+                              alert(`App server URL updated to: ${formattedUrl}\nReconnecting...`);
+                              window.location.reload();
+                            }}
+                          >
+                            Save & Apply URL
+                          </button>
+                        </div>
+                        <small style={{ color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
+                          Configure the IP/domain that this device connects to. For mobile installs, this specifies the active server.
+                        </small>
+                      </div>
+                    </div>
                   </>
                 )}
 
@@ -3817,6 +4050,14 @@ function App() {
               <div className="panel" style={{ padding: '14px', margin: '0' }}>
                 <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Location</span>
                 <p style={{ fontSize: '1.05rem', fontWeight: '600' }}>{activeAsset.location_name || 'Unassigned'}</p>
+              </div>
+              <div className="panel" style={{ padding: '14px', margin: '0' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Category</span>
+                <p style={{ fontSize: '1.05rem', fontWeight: '600' }}>{activeAsset.category || 'Uncategorized'}</p>
+              </div>
+              <div className="panel" style={{ padding: '14px', margin: '0' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>SKU / Model Ref</span>
+                <p style={{ fontSize: '1.05rem', fontWeight: '600', fontFamily: 'monospace' }}>{activeAsset.sku || 'N/A'}</p>
               </div>
             </div>
 

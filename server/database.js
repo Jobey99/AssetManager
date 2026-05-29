@@ -91,6 +91,7 @@ async function initDatabase() {
         location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
         status TEXT DEFAULT 'Available',
         min_quantity INTEGER DEFAULT 0,
+        category TEXT DEFAULT 'Uncategorized',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
@@ -125,6 +126,14 @@ async function initDatabase() {
       await dbRun('ALTER TABLE users ADD COLUMN password_hash TEXT');
       await dbRun('ALTER TABLE users ADD COLUMN salt TEXT');
       console.log('Migrated users table with password fields.');
+    } catch (e) {
+      // Column might already exist
+    }
+
+    // Migration: Add category column to assets table if it doesn't exist
+    try {
+      await dbRun("ALTER TABLE assets ADD COLUMN category TEXT DEFAULT 'Uncategorized'");
+      console.log("Migrated assets table with category field.");
     } catch (e) {
       // Column might already exist
     }

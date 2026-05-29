@@ -469,8 +469,7 @@ app.post('/api/transactions', async (req, res) => {
 
 // 4. Users Endpoints
 
-// GET /api/users
-// GET /api/users
+// GET /api/users - Available to all logged-in users (needed for checkout selection)
 app.get('/api/users', async (req, res) => {
   try {
     const users = await dbAll('SELECT id, name, role, created_at FROM users ORDER BY name ASC');
@@ -480,8 +479,11 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
-// POST /api/users
+// POST /api/users - Only Admin can create users
 app.post('/api/users', async (req, res) => {
+  if (req.user?.role !== 'Admin') {
+    return res.status(403).json({ error: 'Forbidden: Admin access required' });
+  }
   try {
     const { name, role, password } = req.body;
     if (!name || !role) {
@@ -505,8 +507,11 @@ app.post('/api/users', async (req, res) => {
   }
 });
 
-// PUT /api/users/:id
+// PUT /api/users/:id - Only Admin can edit users/reset passwords
 app.put('/api/users/:id', async (req, res) => {
+  if (req.user?.role !== 'Admin') {
+    return res.status(403).json({ error: 'Forbidden: Admin access required' });
+  }
   try {
     const { id } = req.params;
     const { name, role, password } = req.body;
@@ -534,8 +539,11 @@ app.put('/api/users/:id', async (req, res) => {
   }
 });
 
-// DELETE /api/users/:id
+// DELETE /api/users/:id - Only Admin can delete users
 app.delete('/api/users/:id', async (req, res) => {
+  if (req.user?.role !== 'Admin') {
+    return res.status(403).json({ error: 'Forbidden: Admin access required' });
+  }
   try {
     const { id } = req.params;
     const result = await dbRun('DELETE FROM users WHERE id = ?', [id]);

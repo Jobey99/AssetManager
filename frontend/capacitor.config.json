@@ -1,6 +1,6 @@
 {
   "appId": "com.assethub.app",
-  "appName": "Asset Hub",
+  "appName": "Zavi Asset Hub",
   "webDir": "dist",
   "bundledWebRuntime": false,
   "server": {
