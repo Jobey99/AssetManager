@@ -1066,6 +1066,106 @@ function App() {
   const lowStockCount = assets.filter(a => a.status === 'Low Stock' || a.status === 'Out of Stock').length;
   const uniqueItemsCount = assets.length;
 
+  // ----------------- CONNECTION MODALS -----------------
+  const renderConnectionErrorModal = () => {
+    if (connectionOk) return null;
+    return (
+      <div className="drawer-backdrop" style={{ zIndex: 3000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+        <div className="panel" style={{ width: '100%', maxWidth: '420px', padding: '24px', position: 'relative', boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 0 16px rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', margin: 'auto' }}>
+          <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+            <div style={{ display: 'inline-flex', padding: '12px', borderRadius: '50%', background: 'rgba(239, 68, 68, 0.15)', color: '#f87171', marginBottom: '16px' }}>
+              <AlertCircle size={32} />
+            </div>
+            <h2 style={{ fontSize: '1.25rem', marginBottom: '8px', color: 'white' }}>Server Connection Failed</h2>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: '1.4' }}>
+              We couldn't connect to the backend server. Please verify the server is running and check your IP settings below.
+            </p>
+          </div>
+          
+          <form onSubmit={(e) => {
+            e.preventDefault();
+            let formattedUrl = serverInput.trim().replace(/\/$/, "");
+            if (formattedUrl && !/^https?:\/\//i.test(formattedUrl)) {
+              formattedUrl = "http://" + formattedUrl;
+            }
+            localStorage.setItem('server_api_url', formattedUrl);
+            setServerUrl(formattedUrl);
+            alert("Reconnecting to server...");
+            window.location.reload();
+          }}>
+            <div className="form-group" style={{ marginBottom: '20px' }}>
+              <label className="form-label" style={{ fontSize: '0.8rem' }}>Server IP & Port / Host URL</label>
+              <input 
+                type="text" 
+                className="form-control" 
+                placeholder="e.g. http://192.168.0.100:5000"
+                value={serverInput}
+                onChange={(e) => setServerInput(e.target.value)}
+                required
+              />
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
+                Retry Connection
+              </button>
+              <button type="button" className="btn btn-secondary" style={{ width: '100%', opacity: 0.7 }} onClick={() => setConnectionOk(true)}>
+                Proceed Offline / Demo Mode
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  };
+
+  const renderConnectionSettingsModal = () => {
+    if (!showConnectionModal) return null;
+    return (
+      <div className="drawer-backdrop" style={{ zIndex: 3001 }} onClick={() => setShowConnectionModal(false)}>
+        <div className="drawer" onClick={(e) => e.stopPropagation()}>
+          <div className="drawer-header">
+            <h2>Server IP Settings</h2>
+            <button className="drawer-close" onClick={() => setShowConnectionModal(false)}><X size={20} /></button>
+          </div>
+          
+          <form onSubmit={(e) => {
+            e.preventDefault();
+            let formattedUrl = serverInput.trim().replace(/\/$/, "");
+            if (formattedUrl && !/^https?:\/\//i.test(formattedUrl)) {
+              formattedUrl = "http://" + formattedUrl;
+            }
+            localStorage.setItem('server_api_url', formattedUrl);
+            setServerUrl(formattedUrl);
+            setShowConnectionModal(false);
+            alert("Server connection URL updated! Reconnecting...");
+            window.location.reload();
+          }}>
+            <div className="form-group">
+              <label className="form-label">Server Connection URL *</label>
+              <input 
+                type="text" 
+                className="form-control" 
+                required 
+                placeholder="e.g. http://192.168.1.50:5000"
+                value={serverInput}
+                onChange={(e) => setServerInput(e.target.value)}
+              />
+              <small style={{ color: 'var(--text-muted)', marginTop: '6px', display: 'block' }}>
+                Input your server's IP address or domain URL (e.g. `http://192.168.1.50:5000` or `https://assets.yourdomain.com`) so this device can connect and sync.
+              </small>
+            </div>
+
+            <div style={{ marginTop: '24px', display: 'flex', gap: '12px' }}>
+              <button type="submit" className="btn btn-primary" style={{ flexGrow: 1 }}>Save and Reconnect</button>
+              <button type="button" className="btn btn-secondary" onClick={() => setShowConnectionModal(false)}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  };
+
   if (!isAuthenticated) {
     return (
       <div className="login-screen-wrapper">
@@ -1115,68 +1215,48 @@ function App() {
             </button>
           </form>
 
-          <div className="login-download-apk-section">
+          <div className="login-download-apk-section" style={{ display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center', marginTop: '20px' }}>
             <a href={`${API_BASE.replace('/api', '')}/download-apk`} className="login-download-apk-link" target="_blank" rel="noopener noreferrer">
               <Download size={16} />
               <span>Download Mobile App (APK)</span>
             </a>
+            
+            <button 
+              type="button" 
+              className="login-download-apk-link" 
+              style={{ 
+                background: 'none', 
+                border: 'none', 
+                cursor: 'pointer', 
+                display: 'inline-flex', 
+                alignItems: 'center', 
+                justifyContent: 'center',
+                gap: '8px', 
+                fontSize: '0.85rem', 
+                marginTop: '6px',
+                color: 'var(--accent-indigo)',
+                opacity: 0.85
+              }}
+              onClick={() => {
+                setServerInput(serverUrl);
+                setShowConnectionModal(true);
+              }}
+            >
+              <ArrowLeftRight size={14} />
+              <span>Configure Connection IP</span>
+            </button>
           </div>
         </div>
+
+        {renderConnectionErrorModal()}
+        {renderConnectionSettingsModal()}
       </div>
     );
   }
 
   return (
     <div className="app-container">
-      {/* ----------------- CONNECTION ERROR OVERLAY MODAL ----------------- */}
-      {!connectionOk && (
-        <div className="drawer-backdrop" style={{ zIndex: 3000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
-          <div className="panel" style={{ width: '100%', maxWidth: '420px', padding: '24px', position: 'relative', boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 0 16px rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', margin: 'auto' }}>
-            <div style={{ textAlign: 'center', marginBottom: '20px' }}>
-              <div style={{ display: 'inline-flex', padding: '12px', borderRadius: '50%', background: 'rgba(239, 68, 68, 0.15)', color: '#f87171', marginBottom: '16px' }}>
-                <AlertCircle size={32} />
-              </div>
-              <h2 style={{ fontSize: '1.25rem', marginBottom: '8px', color: 'white' }}>Server Connection Failed</h2>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: '1.4' }}>
-                We couldn't connect to the backend server. Please verify the server is running and check your IP settings below.
-              </p>
-            </div>
-            
-            <form onSubmit={(e) => {
-              e.preventDefault();
-              let formattedUrl = serverInput.trim().replace(/\/$/, "");
-              if (formattedUrl && !/^https?:\/\//i.test(formattedUrl)) {
-                formattedUrl = "http://" + formattedUrl;
-              }
-              localStorage.setItem('server_api_url', formattedUrl);
-              setServerUrl(formattedUrl);
-              alert("Reconnecting to server...");
-              window.location.reload();
-            }}>
-              <div className="form-group" style={{ marginBottom: '20px' }}>
-                <label className="form-label" style={{ fontSize: '0.8rem' }}>Server IP & Port / Host URL</label>
-                <input 
-                  type="text" 
-                  className="form-control" 
-                  placeholder="e.g. http://192.168.0.100:5000"
-                  value={serverInput}
-                  onChange={(e) => setServerInput(e.target.value)}
-                  required
-                />
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
-                  Retry Connection
-                </button>
-                <button type="button" className="btn btn-secondary" style={{ width: '100%', opacity: 0.7 }} onClick={() => setConnectionOk(true)}>
-                  Proceed Offline / Demo Mode
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {renderConnectionErrorModal()}
       
       {/* ----------------- SIDEBAR NAV (Desktop) ----------------- */}
       <nav className="sidebar">
@@ -2885,49 +2965,7 @@ function App() {
       )}
 
       {/* ----------------- CONNECTION SETTINGS MODAL ----------------- */}
-      {showConnectionModal && (
-        <div className="drawer-backdrop" onClick={() => setShowConnectionModal(false)}>
-          <div className="drawer" onClick={(e) => e.stopPropagation()}>
-            <div className="drawer-header">
-              <h2>Server IP Settings</h2>
-              <button className="drawer-close" onClick={() => setShowConnectionModal(false)}><X size={20} /></button>
-            </div>
-            
-            <form onSubmit={(e) => {
-              e.preventDefault();
-              let formattedUrl = serverInput.trim().replace(/\/$/, "");
-              if (formattedUrl && !/^https?:\/\//i.test(formattedUrl)) {
-                formattedUrl = "http://" + formattedUrl;
-              }
-              localStorage.setItem('server_api_url', formattedUrl);
-              setServerUrl(formattedUrl);
-              setShowConnectionModal(false);
-              alert("Server connection URL updated! Reconnecting...");
-              window.location.reload();
-            }}>
-              <div className="form-group">
-                <label className="form-label">Server Connection URL *</label>
-                <input 
-                  type="text" 
-                  className="form-control" 
-                  required 
-                  placeholder="e.g. http://192.168.1.50:5000"
-                  value={serverInput}
-                  onChange={(e) => setServerInput(e.target.value)}
-                />
-                <small style={{ color: 'var(--text-muted)', marginTop: '6px', display: 'block' }}>
-                  Input your server's IP address or domain URL (e.g. `http://192.168.1.50:5000` or `https://assets.yourdomain.com`) so this device can connect and sync.
-                </small>
-              </div>
-
-              <div style={{ marginTop: '24px', display: 'flex', gap: '12px' }}>
-                <button type="submit" className="btn btn-primary" style={{ flexGrow: 1 }}>Save and Reconnect</button>
-                <button type="button" className="btn btn-secondary" onClick={() => setShowConnectionModal(false)}>Cancel</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {renderConnectionSettingsModal()}
 
     </div>
   );
