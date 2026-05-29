@@ -278,7 +278,7 @@ function App() {
   const checkConnection = async (url) => {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2000);
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
       const token = localStorage.getItem('auth_token');
       const res = await fetch(`${url}/users`, { 
         signal: controller.signal,
