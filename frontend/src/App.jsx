@@ -136,6 +136,7 @@ function App() {
   const [manualCode, setManualCode] = useState('');
   const [availableCameras, setAvailableCameras] = useState([]);
   const [currentCameraId, setCurrentCameraId] = useState(null);
+  const [scannerZoom, setScannerZoom] = useState(1);
   const scannerRef = useRef(null);
 
   // Quick Transaction Form State
@@ -505,7 +506,9 @@ function App() {
             handleAssetScanned(decodedText);
           },
           (errorMessage) => {}
-        ).catch(err => {
+        ).then(() => {
+          applyAutofocusAndZoom(html5QrCode);
+        }).catch(err => {
           console.error("Camera fail:", err);
           setScanError("Unable to access camera. Make sure camera permissions are enabled, or use the manual entry field below.");
         });
@@ -526,7 +529,9 @@ function App() {
             handleAssetScanned(decodedText);
           },
           (errorMessage) => {}
-        ).catch(err => {
+        ).then(() => {
+          applyAutofocusAndZoom(html5QrCode);
+        }).catch(err => {
           console.warn("Starting with selected camera failed, trying fallback:", err);
           startWithFallback();
         });
@@ -575,7 +580,9 @@ function App() {
                 handleAssetScanned(decodedText);
               },
               (errorMessage) => {}
-            ).catch(err => {
+            ).then(() => {
+              applyAutofocusAndZoom(html5QrCode);
+            }).catch(err => {
               console.warn("Start with selected camera failed, trying fallback:", err);
               startWithFallback();
             });
@@ -608,6 +615,78 @@ function App() {
     }
   };
 
+  const applyAutofocusAndZoom = (html5QrCode, targetZoomValue = null) => {
+    setTimeout(() => {
+      try {
+        if (!html5QrCode || !html5QrCode.isScanning) return;
+        const track = html5QrCode.getRunningTrack();
+        if (track) {
+          const capabilities = track.getCapabilities ? track.getCapabilities() : {};
+          const constraints = {};
+          
+          if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
+            constraints.focusMode = 'continuous';
+          }
+          
+          const zoomToUse = targetZoomValue !== null ? targetZoomValue : scannerZoom;
+          if (capabilities.zoom && zoomToUse > 1) {
+            const minZoom = capabilities.zoom.min || 1;
+            const maxZoom = capabilities.zoom.max || 3;
+            const finalZoom = Math.min(zoomToUse, maxZoom);
+            if (finalZoom >= minZoom) {
+              constraints.advanced = [{ zoom: finalZoom }];
+            }
+          }
+          
+          if (Object.keys(constraints).length > 0 || constraints.advanced) {
+            html5QrCode.applyVideoConstraints(constraints)
+              .then(() => console.log("Applied camera constraints:", constraints))
+              .catch(err => {
+                console.warn("Failed to apply camera constraints:", err);
+                if (constraints.focusMode) {
+                  html5QrCode.applyVideoConstraints({ focusMode: 'continuous' })
+                    .catch(e => console.warn("Failed fallback focus constraint:", e));
+                }
+              });
+          }
+        }
+      } catch (err) {
+        console.warn("Error in applyAutofocusAndZoom:", err);
+      }
+    }, 1200);
+  };
+
+  const toggleZoom = () => {
+    const nextZoom = scannerZoom === 1 ? 2 : 1;
+    setScannerZoom(nextZoom);
+    
+    if (scannerRef.current && scannerRef.current.isScanning) {
+      try {
+        const track = scannerRef.current.getRunningTrack();
+        if (track) {
+          const capabilities = track.getCapabilities ? track.getCapabilities() : {};
+          if (capabilities.zoom) {
+            const maxZoom = capabilities.zoom.max || 3;
+            const targetZoom = nextZoom === 2 ? Math.min(2.0, maxZoom) : 1.0;
+            scannerRef.current.applyVideoConstraints({
+              advanced: [{ zoom: targetZoom }]
+            }).then(() => {
+              console.log("Zoom level toggled to:", targetZoom);
+            }).catch(err => {
+              console.warn("Failed to toggle zoom constraint:", err);
+            });
+          } else {
+            alert("Hardware zoom is not supported on this camera device.");
+          }
+        }
+      } catch (err) {
+        console.warn("Error in zoom toggle:", err);
+      }
+    }
+  };
+
+
+
   const handleCameraSwitch = async () => {
     if (availableCameras.length <= 1 || !scannerRef.current) return;
     const currentIndex = availableCameras.findIndex(d => d.id === currentCameraId);
@@ -635,7 +714,9 @@ function App() {
             handleAssetScanned(decodedText);
           },
           (errorMessage) => {}
-        ).catch(err => {
+        ).then(() => {
+          applyAutofocusAndZoom(html5QrCode);
+        }).catch(err => {
           console.error("Camera fail:", err);
           setScanError("Failed to switch camera.");
         });
@@ -2596,6 +2677,12 @@ function App() {
                               Switch Camera
                             </button>
                           )}
+                          <button 
+                            className="btn btn-secondary" 
+                            onClick={toggleZoom}
+                          >
+                            {scannerZoom === 1 ? 'Zoom 2x' : 'Zoom 1x'}
+                          </button>
                         </div>
                       </div>
                     ) : (
