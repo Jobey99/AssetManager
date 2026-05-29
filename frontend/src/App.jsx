@@ -150,6 +150,10 @@ function App() {
   const [sortField, setSortField] = useState('name');
   const [sortOrder, setSortOrder] = useState('asc');
 
+  // View Mode for Consolidating Locations
+  const [viewMode, setViewMode] = useState('grouped');
+  const [expandedGroups, setExpandedGroups] = useState(new Set());
+
   // Active Asset Drawer
   const [activeAsset, setActiveAsset] = useState(null);
   const [activeAssetDetails, setActiveAssetDetails] = useState(null);
@@ -1857,6 +1861,223 @@ function App() {
     );
   };
 
+  // Moved early isAuthenticated return block downstream to satisfy react hook ordering rules.
+
+  const otherLocations = activeAsset 
+    ? assets.filter(a => 
+        a.id !== activeAsset.id && 
+        (activeAsset.sku && activeAsset.sku.trim() !== '' 
+          ? a.sku?.toLowerCase() === activeAsset.sku.toLowerCase() 
+          : a.name.toLowerCase() === activeAsset.name.toLowerCase()
+        )
+      )
+    : [];
+
+  const handleSort = (field) => {
+    if (sortField === field) {
+      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortOrder('asc');
+    }
+  };
+
+  const renderSortIndicator = (field) => {
+    if (sortField !== field) return ' ⇅';
+    return sortOrder === 'asc' ? ' ▲' : ' ▼';
+  };
+
+  const toggleGroupExpand = (key, e) => {
+    if (e) e.stopPropagation();
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const allCategories = React.useMemo(() => {
+    const cats = new Set(assets.map(a => a.category || 'Uncategorized'));
+    return Array.from(cats).sort();
+  }, [assets]);
+
+  const groupedAssets = React.useMemo(() => {
+    const groups = {};
+    assets.forEach(a => {
+      const isSkuEmpty = !a.sku || a.sku.trim() === '';
+      const key = isSkuEmpty ? `name:${a.name.trim().toLowerCase()}` : `sku:${a.sku.trim().toLowerCase()}`;
+      if (!groups[key]) {
+        groups[key] = {
+          key,
+          name: a.name,
+          sku: a.sku || '',
+          category: a.category || 'Uncategorized',
+          totalQuantity: 0,
+          unit: a.unit || 'pcs',
+          locations: [],
+          status: 'Available',
+          items: []
+        };
+      }
+      groups[key].totalQuantity += a.quantity;
+      groups[key].items.push(a);
+      
+      const locName = a.location_name || 'Unassigned';
+      if (!groups[key].locations.includes(locName)) {
+        groups[key].locations.push(locName);
+      }
+    });
+
+    Object.values(groups).forEach(g => {
+      let groupStatus = 'Available';
+      const hasOutOfStock = g.items.some(item => item.status === 'Out of Stock');
+      const hasLowStock = g.items.some(item => item.status === 'Low Stock');
+      if (hasOutOfStock) {
+        groupStatus = 'Out of Stock';
+      } else if (hasLowStock) {
+        groupStatus = 'Low Stock';
+      }
+      g.status = groupStatus;
+    });
+
+    return Object.values(groups);
+  }, [assets]);
+
+  const filteredAndSortedAssets = React.useMemo(() => {
+    const query = searchQ.toLowerCase().trim();
+    
+    if (viewMode === 'individual') {
+      return assets
+        .filter(a => {
+          const matchesSearch = 
+            a.name.toLowerCase().includes(query) ||
+            (a.sku && a.sku.toLowerCase().includes(query)) ||
+            (a.category && a.category.toLowerCase().includes(query)) ||
+            a.id.toLowerCase().includes(query);
+          
+          const matchesLocation = locationFilter === '' || Number(a.location_id) === Number(locationFilter);
+          const matchesStatus = statusFilter === '' || a.status === statusFilter;
+          const matchesCategory = categoryFilter === '' || (a.category || 'Uncategorized') === categoryFilter;
+          
+          return matchesSearch && matchesLocation && matchesStatus && matchesCategory;
+        })
+        .sort((a, b) => {
+          let valA, valB;
+          switch (sortField) {
+            case 'sku':
+              valA = (a.sku || '').toLowerCase();
+              valB = (b.sku || '').toLowerCase();
+              break;
+            case 'name':
+              valA = a.name.toLowerCase();
+              valB = b.name.toLowerCase();
+              break;
+            case 'category':
+              valA = (a.category || 'Uncategorized').toLowerCase();
+              valB = (b.category || 'Uncategorized').toLowerCase();
+              break;
+            case 'location':
+              valA = (a.location_name || 'Unassigned').toLowerCase();
+              valB = (b.location_name || 'Unassigned').toLowerCase();
+              break;
+            case 'quantity':
+              valA = a.quantity;
+              valB = b.quantity;
+              break;
+            case 'status':
+              const statusRank = { 'Out of Stock': 0, 'Low Stock': 1, 'Available': 2 };
+              valA = statusRank[a.status] !== undefined ? statusRank[a.status] : 99;
+              valB = statusRank[b.status] !== undefined ? statusRank[b.status] : 99;
+              break;
+            default:
+              return 0;
+          }
+          if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
+          if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
+          return 0;
+        });
+    } else {
+      return groupedAssets
+        .filter(g => {
+          const matchesSearch = 
+            g.name.toLowerCase().includes(query) ||
+            g.sku.toLowerCase().includes(query) ||
+            g.category.toLowerCase().includes(query) ||
+            g.items.some(item => item.id.toLowerCase().includes(query));
+          
+          const matchesLocation = locationFilter === '' || g.items.some(item => Number(item.location_id) === Number(locationFilter));
+          const matchesStatus = statusFilter === '' || g.items.some(item => item.status === statusFilter);
+          const matchesCategory = categoryFilter === '' || g.category === categoryFilter;
+          
+          return matchesSearch && matchesLocation && matchesStatus && matchesCategory;
+        })
+        .sort((a, b) => {
+          let valA, valB;
+          switch (sortField) {
+            case 'sku':
+              valA = a.sku.toLowerCase();
+              valB = b.sku.toLowerCase();
+              break;
+            case 'name':
+              valA = a.name.toLowerCase();
+              valB = b.name.toLowerCase();
+              break;
+            case 'category':
+              valA = a.category.toLowerCase();
+              valB = b.category.toLowerCase();
+              break;
+            case 'location':
+              valA = a.locations.length;
+              valB = b.locations.length;
+              break;
+            case 'quantity':
+              valA = a.totalQuantity;
+              valB = b.totalQuantity;
+              break;
+            case 'status':
+              const statusRank = { 'Out of Stock': 0, 'Low Stock': 1, 'Available': 2 };
+              valA = statusRank[a.status] !== undefined ? statusRank[a.status] : 99;
+              valB = statusRank[b.status] !== undefined ? statusRank[b.status] : 99;
+              break;
+            default:
+              return 0;
+          }
+          if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
+          if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
+          return 0;
+        });
+    }
+  }, [assets, groupedAssets, viewMode, searchQ, locationFilter, statusFilter, categoryFilter, sortField, sortOrder]);
+
+  const topActiveItems = React.useMemo(() => {
+    const counts = {};
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    transactions.forEach(tx => {
+      const txDate = new Date(tx.created_at);
+      if (txDate < sevenDaysAgo) return;
+
+      const assetId = tx.asset_id;
+      const assetName = tx.asset_name || assets.find(a => a.id === assetId)?.name || `Item #${assetId}`;
+      const change = Math.abs(tx.quantity_change);
+      
+      if (!counts[assetId]) {
+        counts[assetId] = { id: assetId, name: assetName, totalMoved: 0, count: 0 };
+      }
+      counts[assetId].totalMoved += change;
+      counts[assetId].count += 1;
+    });
+    
+    return Object.values(counts)
+      .sort((a, b) => b.totalMoved - a.totalMoved)
+      .slice(0, 5);
+  }, [transactions, assets]);
+
   if (!isAuthenticated) {
     return (
       <div className="login-screen-wrapper">
@@ -1961,112 +2182,6 @@ function App() {
       </div>
     );
   }
-
-  const otherLocations = activeAsset 
-    ? assets.filter(a => 
-        a.id !== activeAsset.id && 
-        (activeAsset.sku && activeAsset.sku.trim() !== '' 
-          ? a.sku?.toLowerCase() === activeAsset.sku.toLowerCase() 
-          : a.name.toLowerCase() === activeAsset.name.toLowerCase()
-        )
-      )
-    : [];
-
-  const handleSort = (field) => {
-    if (sortField === field) {
-      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortField(field);
-      setSortOrder('asc');
-    }
-  };
-
-  const renderSortIndicator = (field) => {
-    if (sortField !== field) return ' ⇅';
-    return sortOrder === 'asc' ? ' ▲' : ' ▼';
-  };
-
-  const allCategories = React.useMemo(() => {
-    const cats = new Set(assets.map(a => a.category || 'Uncategorized'));
-    return Array.from(cats).sort();
-  }, [assets]);
-
-  const filteredAndSortedAssets = React.useMemo(() => {
-    return assets
-      .filter(a => {
-        const matchesSearch = 
-          a.name.toLowerCase().includes(searchQ.toLowerCase()) ||
-          (a.sku && a.sku.toLowerCase().includes(searchQ.toLowerCase())) ||
-          (a.category && a.category.toLowerCase().includes(searchQ.toLowerCase())) ||
-          a.id.toLowerCase().includes(searchQ.toLowerCase());
-        
-        const matchesLocation = locationFilter === '' || Number(a.location_id) === Number(locationFilter);
-        const matchesStatus = statusFilter === '' || a.status === statusFilter;
-        const matchesCategory = categoryFilter === '' || (a.category || 'Uncategorized') === categoryFilter;
-        
-        return matchesSearch && matchesLocation && matchesStatus && matchesCategory;
-      })
-      .sort((a, b) => {
-        let valA, valB;
-        switch (sortField) {
-          case 'sku':
-            valA = (a.sku || '').toLowerCase();
-            valB = (b.sku || '').toLowerCase();
-            break;
-          case 'name':
-            valA = a.name.toLowerCase();
-            valB = b.name.toLowerCase();
-            break;
-          case 'category':
-            valA = (a.category || 'Uncategorized').toLowerCase();
-            valB = (b.category || 'Uncategorized').toLowerCase();
-            break;
-          case 'location':
-            valA = (a.location_name || 'Unassigned').toLowerCase();
-            valB = (b.location_name || 'Unassigned').toLowerCase();
-            break;
-          case 'quantity':
-            valA = a.quantity;
-            valB = b.quantity;
-            break;
-          case 'status':
-            const statusRank = { 'Out of Stock': 0, 'Low Stock': 1, 'Available': 2 };
-            valA = statusRank[a.status] !== undefined ? statusRank[a.status] : 99;
-            valB = statusRank[b.status] !== undefined ? statusRank[b.status] : 99;
-            break;
-          default:
-            return 0;
-        }
-        if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
-        if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
-        return 0;
-      });
-  }, [assets, searchQ, locationFilter, statusFilter, categoryFilter, sortField, sortOrder]);
-
-  const topActiveItems = React.useMemo(() => {
-    const counts = {};
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
-    transactions.forEach(tx => {
-      const txDate = new Date(tx.created_at);
-      if (txDate < sevenDaysAgo) return;
-
-      const assetId = tx.asset_id;
-      const assetName = tx.asset_name || assets.find(a => a.id === assetId)?.name || `Item #${assetId}`;
-      const change = Math.abs(tx.quantity_change);
-      
-      if (!counts[assetId]) {
-        counts[assetId] = { id: assetId, name: assetName, totalMoved: 0, count: 0 };
-      }
-      counts[assetId].totalMoved += change;
-      counts[assetId].count += 1;
-    });
-    
-    return Object.values(counts)
-      .sort((a, b) => b.totalMoved - a.totalMoved)
-      .slice(0, 5);
-  }, [transactions, assets]);
 
   return (
     <div className="app-container">
@@ -2473,6 +2588,44 @@ function App() {
 
             {/* Filters Bar */}
             <div className="panel" style={{ padding: '16px', display: 'flex', flexWrap: 'wrap', gap: '16px', alignItems: 'center' }}>
+              {/* View Mode Switcher */}
+              <div style={{ display: 'flex', background: 'rgba(255, 255, 255, 0.05)', padding: '3px', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('grouped')}
+                  style={{
+                    padding: '6px 12px',
+                    fontSize: '0.8rem',
+                    fontWeight: '600',
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    background: viewMode === 'grouped' ? 'var(--accent-teal)' : 'transparent',
+                    color: viewMode === 'grouped' ? 'white' : 'var(--text-secondary)',
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  Grouped View
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('individual')}
+                  style={{
+                    padding: '6px 12px',
+                    fontSize: '0.8rem',
+                    fontWeight: '600',
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    background: viewMode === 'individual' ? 'var(--accent-teal)' : 'transparent',
+                    color: viewMode === 'individual' ? 'white' : 'var(--text-secondary)',
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  Individual QR Codes
+                </button>
+              </div>
+
               <div className="search-container">
                 <Search size={18} className="search-icon" />
                 <input 
@@ -2544,7 +2697,8 @@ function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredAndSortedAssets.map(a => {
+                         {filteredAndSortedAssets.map(a => {
+                        if (viewMode === 'individual') {
                           const isInPrintQueue = printQueue.some(item => item.id === a.id);
                           return (
                             <tr 
@@ -2597,7 +2751,7 @@ function App() {
                                 <span className={`badge ${
                                   a.status === 'Available' ? 'badge-success' : 
                                   a.status === 'Low Stock' ? 'badge-warning' : 'badge-danger'
-                                }}`}>
+                                }`}>
                                   {a.status}
                                 </span>
                               </td>
@@ -2631,10 +2785,126 @@ function App() {
                               </td>
                             </tr>
                           );
-                        })}
+                        } else {
+                          const isExpanded = expandedGroups.has(a.key);
+                          const totalLocations = a.locations.length;
+                          return (
+                            <React.Fragment key={a.key}>
+                              <tr 
+                                style={{ cursor: 'pointer' }} 
+                                onClick={() => toggleGroupExpand(a.key)}
+                              >
+                                <td style={{ fontFamily: 'monospace', fontWeight: '500', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                                  {a.sku || <span style={{ color: 'var(--text-muted)' }}>N/A</span>}
+                                </td>
+                                <td>
+                                  <div style={{ fontWeight: '600', color: 'white' }}>
+                                    {a.name}
+                                  </div>
+                                </td>
+                                <td style={{ fontWeight: '500' }}>
+                                  <span className="badge badge-secondary" style={{ background: 'rgba(255, 255, 255, 0.08)', color: 'var(--text-secondary)' }}>
+                                    {a.category}
+                                  </span>
+                                </td>
+                                <td style={{ fontSize: '0.9rem' }}>
+                                  <strong style={{ color: 'white' }}>{totalLocations}</strong> {totalLocations === 1 ? 'location' : 'locations'}
+                                  <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                    {a.locations.join(', ')}
+                                  </span>
+                                </td>
+                                <td>
+                                  <span style={{ fontSize: '1.05rem', fontWeight: 'bold', color: 'white' }}>
+                                    {a.totalQuantity} {a.unit}
+                                  </span>
+                                </td>
+                                <td>
+                                  <span className={`badge ${
+                                    a.status === 'Available' ? 'badge-success' : 
+                                    a.status === 'Low Stock' ? 'badge-warning' : 'badge-danger'
+                                  }`}>
+                                    {a.status}
+                                  </span>
+                                </td>
+                                <td>
+                                  <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', alignItems: 'center' }}>
+                                    <button 
+                                      className="btn btn-secondary" 
+                                      style={{ padding: '6px 12px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+                                      onClick={(e) => toggleGroupExpand(a.key, e)}
+                                    >
+                                      {isExpanded ? 'Collapse' : 'Expand'}
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                              {isExpanded && (
+                                <tr style={{ background: 'rgba(255, 255, 255, 0.015)' }}>
+                                  <td colSpan="7" style={{ padding: '12px 24px 16px 40px' }}>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                                        Location Breakdowns & QR Codes
+                                      </div>
+                                      <table className="custom-table" style={{ background: 'rgba(0,0,0,0.2)', borderRadius: '6px', margin: 0 }}>
+                                        <thead>
+                                          <tr style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                                            <th style={{ fontSize: '0.75rem', padding: '6px 12px' }}>QR Code ID</th>
+                                            <th style={{ fontSize: '0.75rem', padding: '6px 12px' }}>Garage Location</th>
+                                            <th style={{ fontSize: '0.75rem', padding: '6px 12px' }}>Stock Alert</th>
+                                            <th style={{ fontSize: '0.75rem', padding: '6px 12px' }}>Status</th>
+                                            <th style={{ fontSize: '0.75rem', padding: '6px 12px', textAlign: 'center' }}>Stock Level</th>
+                                            <th style={{ fontSize: '0.75rem', padding: '6px 12px', textAlign: 'right' }}>Actions</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {a.items.map(item => {
+                                            const isInPrintQueue = printQueue.some(q => q.id === item.id);
+                                            return (
+                                              <tr key={item.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)', cursor: 'pointer' }} onClick={() => setActiveAsset(item)}>
+                                                <td style={{ fontFamily: 'monospace', color: 'var(--accent-cyan)', padding: '8px 12px', fontSize: '0.8rem' }}>{item.id}</td>
+                                                <td style={{ padding: '8px 12px', fontSize: '0.8rem' }}>{item.location_name || 'Unassigned'}</td>
+                                                <td style={{ padding: '8px 12px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Min: {item.min_quantity}</td>
+                                                <td style={{ padding: '8px 12px', fontSize: '0.8rem' }}>
+                                                  <span className={`badge ${item.status === 'Available' ? 'badge-success' : item.status === 'Low Stock' ? 'badge-warning' : 'badge-danger'}`} style={{ fontSize: '0.7rem', padding: '2px 6px' }}>
+                                                    {item.status}
+                                                  </span>
+                                                </td>
+                                                <td style={{ padding: '8px 12px', textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                                                  <div className="quantity-adjustment-group" style={{ display: 'inline-flex', gap: '6px' }}>
+                                                    <button className="btn btn-circle btn-sm" onClick={() => handleQuickStockChange(item, 'CHECK_OUT')}>-</button>
+                                                    <span style={{ fontWeight: 'bold', color: 'white', minWidth: '30px', textAlign: 'center', fontSize: '0.9rem' }}>{item.quantity}</span>
+                                                    <button className="btn btn-circle btn-sm" onClick={() => handleQuickStockChange(item, 'CHECK_IN')}>+</button>
+                                                  </div>
+                                                </td>
+                                                <td style={{ padding: '8px 12px', textAlign: 'right' }} onClick={e => e.stopPropagation()}>
+                                                  <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                                                    <button className={`btn ${isInPrintQueue ? 'btn-success' : 'btn-secondary'} btn-icon-only btn-sm`} style={{ padding: '4px' }} onClick={() => togglePrintQueue(item)} title="Queue label">
+                                                      <Printer size={12} />
+                                                    </button>
+                                                    <button className="btn btn-secondary btn-icon-only btn-sm" style={{ padding: '4px' }} onClick={() => { setEditingAsset(item); setShowEditAsset(true); }} title="Edit details">
+                                                      <Edit size={12} />
+                                                    </button>
+                                                    <button className="btn btn-secondary btn-icon-only btn-sm" style={{ padding: '4px', color: 'var(--accent-rose)' }} onClick={() => handleDeleteAsset(item.id, item.name)} title="Delete item">
+                                                      <Trash2 size={12} />
+                                                    </button>
+                                                  </div>
+                                                </td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  </td>
+                                </tr>
+                              )}
+                            </React.Fragment>
+                          );
+                        }
+                      })}
                       {assets.length === 0 && (
                         <tr>
-                          <td colSpan="6" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>
+                          <td colSpan="7" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>
                             No assets registered yet. Click 'Create Asset' to add your first physical material.
                           </td>
                         </tr>
@@ -2648,6 +2918,7 @@ function App() {
             <div className="mobile-only-view">
               <div className="mobile-assets-list">
                 {filteredAndSortedAssets.map(a => {
+                  if (viewMode === 'individual') {
                     const isInPrintQueue = printQueue.some(item => item.id === a.id);
                     return (
                       <div 
@@ -2684,10 +2955,10 @@ function App() {
                           </div>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem' }}>
                             <span style={{ color: 'var(--text-secondary)' }}>Stock Level:</span>
-                            <div className="quantity-adjustment-group">
+                            <div className="quantity-adjustment-group" onClick={e => e.stopPropagation()}>
                               <button 
                                 className="btn btn-circle"
-                                onClick={(e) => { e.stopPropagation(); handleQuickStockChange(a, 'CHECK_OUT'); }}
+                                onClick={() => handleQuickStockChange(a, 'CHECK_OUT')}
                               >
                                 -
                               </button>
@@ -2696,11 +2967,11 @@ function App() {
                               </span>
                               <button 
                                 className="btn btn-circle"
-                                onClick={(e) => { e.stopPropagation(); handleQuickStockChange(a, 'CHECK_IN'); }}
+                                onClick={() => handleQuickStockChange(a, 'CHECK_IN')}
                               >
                                 +
                               </button>
-                              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{a.unit}</span>
+                              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginLeft: '4px' }}>{a.unit}</span>
                             </div>
                           </div>
                           {a.min_quantity > 0 && (
@@ -2711,11 +2982,11 @@ function App() {
                           )}
                         </div>
                         
-                        <div className="mobile-asset-card-footer">
+                        <div className="mobile-asset-card-footer" onClick={e => e.stopPropagation()}>
                           <button 
                             className={`btn ${isInPrintQueue ? 'btn-success' : 'btn-secondary'}`} 
                             style={{ fontSize: '0.8rem', padding: '6px 12px', flexGrow: 1, marginRight: '8px' }}
-                            onClick={(e) => { e.stopPropagation(); togglePrintQueue(a); }}
+                            onClick={() => togglePrintQueue(a)}
                           >
                             <Printer size={14} style={{ marginRight: '6px' }} />
                             {isInPrintQueue ? "Queued" : "Queue Label"}
@@ -2723,21 +2994,121 @@ function App() {
                           <button 
                             className="btn btn-secondary btn-icon-only" 
                             style={{ padding: '6px', marginRight: '6px' }}
-                            onClick={(e) => { e.stopPropagation(); setEditingAsset(a); setShowEditAsset(true); }}
+                            onClick={() => { setEditingAsset(a); setShowEditAsset(true); }}
                           >
                             <Edit size={14} />
                           </button>
                           <button 
                             className="btn btn-secondary btn-icon-only" 
                             style={{ padding: '6px', color: 'var(--accent-rose)' }}
-                            onClick={(e) => { e.stopPropagation(); handleDeleteAsset(a.id, a.name); }}
+                            onClick={() => handleDeleteAsset(a.id, a.name)}
                           >
                             <Trash2 size={14} />
                           </button>
                         </div>
                       </div>
                     );
-                  })}
+                  } else {
+                    const isExpanded = expandedGroups.has(a.key);
+                    const totalLocations = a.locations.length;
+                    return (
+                      <div 
+                        key={a.key} 
+                        className="mobile-asset-card panel" 
+                        onClick={() => toggleGroupExpand(a.key)}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <div className="mobile-asset-card-header">
+                          <div>
+                            <h3 style={{ color: 'white', margin: 0, fontSize: '1.1rem' }}>
+                              {a.name}
+                            </h3>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginTop: '2px' }}>
+                              {a.sku ? `SKU: ${a.sku}` : 'No SKU'} | {a.category}
+                            </span>
+                          </div>
+                          <span className={`badge ${
+                            a.status === 'Available' ? 'badge-success' : 
+                            a.status === 'Low Stock' ? 'badge-warning' : 'badge-danger'
+                          }`}>
+                            {a.status}
+                          </span>
+                        </div>
+                        
+                        <div className="mobile-asset-card-body">
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '0.85rem' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Total Stock:</span>
+                            <strong style={{ color: 'white', fontSize: '1rem' }}>{a.totalQuantity} {a.unit}</strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '0.85rem' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Locations:</span>
+                            <strong style={{ color: 'white', textAlign: 'right' }}>{totalLocations} ({a.locations.join(', ')})</strong>
+                          </div>
+                        </div>
+
+                        {isExpanded && (
+                          <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(255, 255, 255, 0.08)', display: 'flex', flexDirection: 'column', gap: '12px' }} onClick={e => e.stopPropagation()}>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: '600', textTransform: 'uppercase' }}>
+                              Location Breakdown
+                            </div>
+                            {a.items.map(item => {
+                              const isInPrintQueue = printQueue.some(q => q.id === item.id);
+                              return (
+                                <div key={item.id} style={{ background: 'rgba(255, 255, 255, 0.03)', borderRadius: '6px', padding: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span style={{ fontWeight: '600', color: 'white', fontSize: '0.85rem' }}>
+                                      {item.location_name || 'Unassigned'}
+                                    </span>
+                                    <span className={`badge ${item.status === 'Available' ? 'badge-success' : item.status === 'Low Stock' ? 'badge-warning' : 'badge-danger'}`} style={{ fontSize: '0.7rem', padding: '1px 4px' }}>
+                                      {item.status}
+                                    </span>
+                                  </div>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem' }}>
+                                    <span style={{ fontFamily: 'monospace', color: 'var(--accent-cyan)' }}>{item.id}</span>
+                                    <div className="quantity-adjustment-group">
+                                      <button className="btn btn-circle btn-sm" onClick={() => handleQuickStockChange(item, 'CHECK_OUT')}>-</button>
+                                      <span style={{ fontWeight: 'bold', color: 'white', minWidth: '30px', textAlign: 'center' }}>{item.quantity}</span>
+                                      <button className="btn btn-circle btn-sm" onClick={() => handleQuickStockChange(item, 'CHECK_IN')}>+</button>
+                                    </div>
+                                  </div>
+                                  <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', marginTop: '4px' }}>
+                                    <button 
+                                      className={`btn ${isInPrintQueue ? 'btn-success' : 'btn-secondary'} btn-sm`}
+                                      style={{ padding: '4px 8px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+                                      onClick={() => togglePrintQueue(item)}
+                                    >
+                                      <Printer size={12} /> {isInPrintQueue ? 'Queued' : 'Label'}
+                                    </button>
+                                    <button 
+                                      className="btn btn-secondary btn-sm"
+                                      style={{ padding: '4px 8px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+                                      onClick={() => { setEditingAsset(item); setShowEditAsset(true); }}
+                                    >
+                                      <Edit size={12} /> Edit
+                                    </button>
+                                    <button 
+                                      className="btn btn-secondary btn-sm"
+                                      style={{ padding: '4px 8px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--accent-rose)' }}
+                                      onClick={() => handleDeleteAsset(item.id, item.name)}
+                                    >
+                                      <Trash2 size={12} /> Delete
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        <div className="mobile-asset-card-footer" style={{ textAlign: 'center', marginTop: '8px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '8px' }}>
+                          <span style={{ fontSize: '0.8rem', color: 'var(--accent-cyan)' }}>
+                            {isExpanded ? 'Tap to Collapse' : 'Tap to Expand Locations'}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  }
+                })}
                 {assets.length === 0 && (
                   <div className="panel" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-secondary)' }}>
                     No assets registered yet. Click 'Create Asset' to add your first physical material.
