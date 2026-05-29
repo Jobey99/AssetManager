@@ -1,0 +1,6 @@
+{
+  "appId": "com.assethub.app",
+  "appName": "Asset Hub",
+  "webDir": "dist",
+  "bundledWebRuntime": false
+}

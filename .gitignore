@@ -1,0 +1,21 @@
+# Dependency directories
+node_modules/
+**/node_modules/
+
+# Production builds
+frontend/dist/
+
+# Local databases and SQLite files
+server/inventory.db
+*.db
+*.db-journal
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# OS metadata
+.DS_Store
+Thumbs.db
