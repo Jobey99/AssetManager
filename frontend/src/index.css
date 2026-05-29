@@ -831,8 +831,23 @@ textarea.form-control {
   padding: 16px;
   position: relative;
   display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.printable-label-card-content {
+  display: flex;
   gap: 16px;
   align-items: center;
+}
+
+.printable-label-card-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  padding-top: 10px;
 }
 
 .label-remove-btn {
@@ -960,6 +975,11 @@ textarea.form-control {
     padding-bottom: 84px; /* offset bottom nav */
     max-width: 100%;
     overflow-x: hidden;
+  }
+  
+  .print-queue-indicator {
+    bottom: 80px;
+    right: 16px;
   }
   
   .mobile-nav {
@@ -1177,5 +1197,95 @@ textarea.form-control {
 
 .login-download-apk-link:hover {
   color: #2dd4bf;
+}
+
+/* Responsive View Visibility Utilities */
+@media (min-width: 769px) {
+  .desktop-only-view {
+    display: block;
+  }
+  .mobile-only-view {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .desktop-only-view {
+    display: none;
+  }
+  .mobile-only-view {
+    display: block;
+  }
+  
+  /* Make the items filter bar layout nice on mobile */
+  .panel[style*="flex-wrap"] {
+    flex-direction: column;
+    align-items: stretch !important;
+  }
+  .search-container {
+    width: 100% !important;
+  }
+  .panel[style*="flex-wrap"] select {
+    width: 100% !important;
+  }
+}
+
+/* Mobile Asset Cards */
+.mobile-assets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.mobile-asset-card {
+  padding: 16px;
+  margin-bottom: 0px;
+}
+
+.mobile-asset-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.mobile-asset-card-body {
+  margin: 14px 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.mobile-asset-card-footer {
+  display: flex;
+  justify-content: space-between;
+  border-top: 1px solid var(--border-color);
+  padding-top: 12px;
+  margin-top: 12px;
+}
+
+.quantity-adjustment-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-circle {
+  width: 28px;
+  height: 28px;
+  border-radius: 50% !important;
+  padding: 0 !important;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  background-color: #334155 !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  color: white !important;
+  font-size: 1.1rem;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.btn-circle:hover {
+  background-color: #475569 !important;
 }
 

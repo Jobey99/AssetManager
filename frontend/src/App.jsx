@@ -684,6 +684,182 @@ function App() {
     }
   };
 
+  // Quick Stock Adjustments directly from directory
+  const handleQuickStockChange = async (asset, type) => {
+    const qtyChange = 1;
+    const userName = currentUser?.name || 'System';
+    try {
+      const res = await authFetch(`${API_BASE}/transactions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          asset_id: asset.id,
+          type: type, // 'CHECK_IN' to add, 'CHECK_OUT' to remove
+          quantity_change: qtyChange,
+          user_name: userName,
+          location_id: asset.location_id || null,
+          notes: 'Quick adjust from directory'
+        })
+      });
+
+      const data = await res.json();
+      
+      if (res.ok) {
+        // Update local state directly
+        const updated = assets.map(a => 
+          a.id === asset.id 
+            ? { ...a, quantity: data.quantity, status: data.status } 
+            : a
+        );
+        setAssets(updated);
+        localStorage.setItem('cached_assets', JSON.stringify(updated));
+        fetchTransactions(); // Refresh transactions in background
+      } else {
+        alert(data.error || "Failed to adjust stock.");
+      }
+    } catch (err) {
+      console.error("Quick stock change failed, using offline sync queue:", err);
+      const isOfflineMode = !connectionOk || err.message.includes('Failed to fetch') || err.message.includes('Load failed') || err.name === 'TypeError';
+      
+      if (isOfflineMode) {
+        const offlineAction = {
+          id: 'tx_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9),
+          type: 'TX_SUBMIT',
+          payload: {
+            asset_id: asset.id,
+            type: type,
+            quantity_change: qtyChange,
+            user_name: userName,
+            location_id: asset.location_id || null,
+            notes: "Quick adjust (Offline)"
+          }
+        };
+        
+        const currentQueue = JSON.parse(localStorage.getItem('local_sync_queue') || '[]');
+        currentQueue.push(offlineAction);
+        localStorage.setItem('local_sync_queue', JSON.stringify(currentQueue));
+        setSyncQueueCount(currentQueue.length);
+        
+        const changeVal = type === 'CHECK_IN' ? qtyChange : -qtyChange;
+        const newQty = Math.max(0, asset.quantity + changeVal);
+        const newStatus = calculateStatus(newQty, asset.min_quantity);
+        
+        const updatedAsset = { 
+          ...asset, 
+          quantity: newQty, 
+          status: newStatus
+        };
+        
+        const updatedAssetsList = assets.map(a => a.id === asset.id ? updatedAsset : a);
+        setAssets(updatedAssetsList);
+        localStorage.setItem('cached_assets', JSON.stringify(updatedAssetsList));
+        
+        const dummyTx = {
+          id: offlineAction.id,
+          asset_id: asset.id,
+          type: type,
+          quantity_change: changeVal,
+          user_name: userName,
+          location_id: asset.location_id || null,
+          location_name: asset.location_name,
+          notes: "Quick adjust (Offline queued)",
+          created_at: new Date().toISOString()
+        };
+        const updatedTxList = [dummyTx, ...transactions];
+        setTransactions(updatedTxList);
+        localStorage.setItem('cached_transactions', JSON.stringify(updatedTxList));
+      } else {
+        alert("Network error: Could not complete quick stock adjustment.");
+      }
+    }
+  };
+
+  // Helper to calculate status in offline updates
+  const calculateStatus = (qty, minQty) => {
+    if (qty <= 0) return 'Out of Stock';
+    if (minQty && qty <= minQty) return 'Low Stock';
+    return 'Available';
+  };
+
+  // Export label details as high quality image
+  const downloadLabelImage = async (asset) => {
+    try {
+      const qrUrl = await QRCode.toDataURL(asset.id, { 
+        margin: 1, 
+        width: 300,
+        color: {
+          dark: '#000000',
+          light: '#ffffff'
+        }
+      });
+      
+      const canvas = document.createElement('canvas');
+      // Set to 600x300 for crisp high-resolution 2:1 ratio (PrintMaster friendly)
+      canvas.width = 600;
+      canvas.height = 300;
+      const ctx = canvas.getContext('2d');
+      
+      // Draw background
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      // Load QR Code Image
+      const img = new Image();
+      img.onload = () => {
+        // Draw QR Code on the left side
+        ctx.drawImage(img, 25, 25, 250, 250);
+        
+        // Draw Text info on the right side
+        ctx.fillStyle = '#000000';
+        
+        // Asset Name
+        ctx.font = 'bold 36px "Inter", "Segoe UI", sans-serif';
+        const maxTextWidth = 280;
+        const name = asset.name;
+        let fontSize = 36;
+        ctx.font = `bold ${fontSize}px "Inter", "Segoe UI", sans-serif`;
+        
+        // Dynamically scale down font if text overflows right side boundary
+        while (ctx.measureText(name).width > maxTextWidth && fontSize > 20) {
+          fontSize -= 2;
+          ctx.font = `bold ${fontSize}px "Inter", "Segoe UI", sans-serif`;
+        }
+        ctx.fillText(name, 295, 90);
+        
+        // SKU or ID
+        ctx.fillStyle = '#555555';
+        ctx.font = '500 22px "Inter", "Segoe UI", sans-serif';
+        const skuText = asset.sku ? `SKU: ${asset.sku}` : `ID: ${asset.id}`;
+        ctx.fillText(skuText, 295, 145);
+        
+        // Location
+        ctx.fillStyle = '#111111';
+        ctx.font = '600 24px "Inter", "Segoe UI", sans-serif';
+        const locText = asset.location_name || 'No Location';
+        ctx.fillText(locText, 295, 215);
+        
+        // Trigger file download
+        const url = canvas.toDataURL('image/png');
+        const a = document.createElement('a');
+        a.download = `label-${asset.name.replace(/[^a-z0-9]/gi, '-').toLowerCase()}.png`;
+        a.href = url;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      };
+      img.src = qrUrl;
+    } catch (err) {
+      console.error("Failed to generate label image:", err);
+      alert("Failed to generate label image.");
+    }
+  };
+
+  // Copy QR data to clipboard
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text);
+    alert(`Copied ID: "${text}" to clipboard. You can paste this in PrintMaster!`);
+  };
+
   // Create Handlers
   const handleCreateAsset = async (e) => {
     e.preventDefault();
@@ -1638,110 +1814,242 @@ function App() {
               )}
             </div>
 
-            {/* Asset Table Panel */}
-            <div className="panel">
-              <div className="table-container">
-                <table className="custom-table">
-                  <thead>
-                    <tr>
-                      <th>QR Code / SKU</th>
-                      <th>Asset Name</th>
-                      <th>Garage Location</th>
-                      <th>Stock Level</th>
-                      <th>Status</th>
-                      <th style={{ textAlign: 'right' }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {assets
-                      .filter(a => {
-                        const matchesSearch = 
-                          a.name.toLowerCase().includes(searchQ.toLowerCase()) ||
-                          (a.sku && a.sku.toLowerCase().includes(searchQ.toLowerCase())) ||
-                          a.id.toLowerCase().includes(searchQ.toLowerCase());
-                        
-                        const matchesLocation = locationFilter === '' || Number(a.location_id) === Number(locationFilter);
-                        const matchesStatus = statusFilter === '' || a.status === statusFilter;
-                        
-                        return matchesSearch && matchesLocation && matchesStatus;
-                      })
-                      .map(a => {
-                        const isInPrintQueue = printQueue.some(item => item.id === a.id);
-                        return (
-                          <tr key={a.id}>
-                            <td style={{ fontFamily: 'monospace', fontWeight: '500', fontSize: '0.85rem' }}>
-                              <span style={{ color: 'var(--accent-cyan)' }}>{a.id}</span>
-                              {a.sku && <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.75rem' }}>SKU: {a.sku}</span>}
-                            </td>
-                            <td>
-                              <div style={{ fontWeight: '600', cursor: 'pointer', color: 'white' }} onClick={() => setActiveAsset(a)}>
-                                {a.name}
-                              </div>
-                              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                                {a.description ? (a.description.length > 60 ? a.description.substring(0, 60) + '...' : a.description) : 'No description'}
-                              </span>
-                            </td>
-                            <td>{a.location_name || <span style={{ color: 'var(--text-muted)' }}>Unassigned</span>}</td>
-                            <td>
-                              <strong style={{ fontSize: '1rem' }}>{a.quantity}</strong> <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{a.unit}</span>
-                              {a.min_quantity > 0 && <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-muted)' }}>Min: {a.min_quantity}</span>}
-                            </td>
-                            <td>
-                              <span className={`badge ${
-                                a.status === 'Available' ? 'badge-success' : 
-                                a.status === 'Low Stock' ? 'badge-warning' : 'badge-danger'
-                              }`}>
-                                {a.status}
-                              </span>
-                            </td>
-                            <td>
-                              <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                                <button 
-                                  className={`btn ${isInPrintQueue ? 'btn-success' : 'btn-secondary'} btn-icon-only`}
-                                  style={{ padding: '6px' }}
-                                  title={isInPrintQueue ? "Remove from printing" : "Add to print queue"}
-                                  onClick={() => togglePrintQueue(a)}
-                                >
-                                  <Printer size={16} />
-                                </button>
-                                <button 
-                                  className="btn btn-secondary btn-icon-only" 
-                                  style={{ padding: '6px' }}
-                                  title="Edit asset parameters"
-                                  onClick={() => { setEditingAsset(a); setShowEditAsset(true); }}
-                                >
-                                  <Edit size={16} />
-                                </button>
-                                <button 
-                                  className="btn btn-secondary btn-icon-only" 
-                                  style={{ padding: '6px' }}
-                                  title="View details / history"
-                                  onClick={() => setActiveAsset(a)}
-                                >
-                                  <Info size={16} />
-                                </button>
-                                <button 
-                                  className="btn btn-secondary btn-icon-only" 
-                                  style={{ padding: '6px', color: 'var(--accent-rose)' }} 
-                                  title="Delete item"
-                                  onClick={() => handleDeleteAsset(a.id, a.name)}
-                                >
-                                  <Trash2 size={16} />
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    {assets.length === 0 && (
+            {/* Responsive Assets Views */}
+            <div className="desktop-only-view">
+              <div className="panel">
+                <div className="table-container">
+                  <table className="custom-table">
+                    <thead>
                       <tr>
-                        <td colSpan="6" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>
-                          No assets registered yet. Click 'Create Asset' to add your first physical material.
-                        </td>
+                        <th>QR Code / SKU</th>
+                        <th>Asset Name</th>
+                        <th>Garage Location</th>
+                        <th>Stock Level</th>
+                        <th>Status</th>
+                        <th style={{ textAlign: 'right' }}>Actions</th>
                       </tr>
-                    )}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {assets
+                        .filter(a => {
+                          const matchesSearch = 
+                            a.name.toLowerCase().includes(searchQ.toLowerCase()) ||
+                            (a.sku && a.sku.toLowerCase().includes(searchQ.toLowerCase())) ||
+                            a.id.toLowerCase().includes(searchQ.toLowerCase());
+                          
+                          const matchesLocation = locationFilter === '' || Number(a.location_id) === Number(locationFilter);
+                          const matchesStatus = statusFilter === '' || a.status === statusFilter;
+                          
+                          return matchesSearch && matchesLocation && matchesStatus;
+                        })
+                        .map(a => {
+                          const isInPrintQueue = printQueue.some(item => item.id === a.id);
+                          return (
+                            <tr key={a.id}>
+                              <td style={{ fontFamily: 'monospace', fontWeight: '500', fontSize: '0.85rem' }}>
+                                <span style={{ color: 'var(--accent-cyan)' }}>{a.id}</span>
+                                {a.sku && <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.75rem' }}>SKU: {a.sku}</span>}
+                              </td>
+                              <td>
+                                <div style={{ fontWeight: '600', cursor: 'pointer', color: 'white' }} onClick={() => setActiveAsset(a)}>
+                                  {a.name}
+                                </div>
+                                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                                  {a.description ? (a.description.length > 60 ? a.description.substring(0, 60) + '...' : a.description) : 'No description'}
+                                </span>
+                              </td>
+                              <td>{a.location_name || <span style={{ color: 'var(--text-muted)' }}>Unassigned</span>}</td>
+                              <td>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <button 
+                                    className="btn btn-circle" 
+                                    title="Decrease stock by 1"
+                                    onClick={(e) => { e.stopPropagation(); handleQuickStockChange(a, 'CHECK_OUT'); }}
+                                  >
+                                    -
+                                  </button>
+                                  <span style={{ fontSize: '1rem', fontWeight: 'bold', minWidth: '30px', textAlign: 'center' }}>
+                                    {a.quantity}
+                                  </span>
+                                  <button 
+                                    className="btn btn-circle" 
+                                    title="Increase stock by 1"
+                                    onClick={(e) => { e.stopPropagation(); handleQuickStockChange(a, 'CHECK_IN'); }}
+                                  >
+                                    +
+                                  </button>
+                                  <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginLeft: '4px' }}>{a.unit}</span>
+                                </div>
+                                {a.min_quantity > 0 && <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>Min: {a.min_quantity}</span>}
+                              </td>
+                              <td>
+                                <span className={`badge ${
+                                  a.status === 'Available' ? 'badge-success' : 
+                                  a.status === 'Low Stock' ? 'badge-warning' : 'badge-danger'
+                                }`}>
+                                  {a.status}
+                                </span>
+                              </td>
+                              <td>
+                                <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                                  <button 
+                                    className={`btn ${isInPrintQueue ? 'btn-success' : 'btn-secondary'} btn-icon-only`}
+                                    style={{ padding: '6px' }}
+                                    title={isInPrintQueue ? "Remove from printing" : "Add to print queue"}
+                                    onClick={() => togglePrintQueue(a)}
+                                  >
+                                    <Printer size={16} />
+                                  </button>
+                                  <button 
+                                    className="btn btn-secondary btn-icon-only" 
+                                    style={{ padding: '6px' }}
+                                    title="Edit asset parameters"
+                                    onClick={() => { setEditingAsset(a); setShowEditAsset(true); }}
+                                  >
+                                    <Edit size={16} />
+                                  </button>
+                                  <button 
+                                    className="btn btn-secondary btn-icon-only" 
+                                    style={{ padding: '6px' }}
+                                    title="View details / history"
+                                    onClick={() => setActiveAsset(a)}
+                                  >
+                                    <Info size={16} />
+                                  </button>
+                                  <button 
+                                    className="btn btn-secondary btn-icon-only" 
+                                    style={{ padding: '6px', color: 'var(--accent-rose)' }} 
+                                    title="Delete item"
+                                    onClick={() => handleDeleteAsset(a.id, a.name)}
+                                  >
+                                    <Trash2 size={16} />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      {assets.length === 0 && (
+                        <tr>
+                          <td colSpan="6" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>
+                            No assets registered yet. Click 'Create Asset' to add your first physical material.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <div className="mobile-only-view">
+              <div className="mobile-assets-list">
+                {assets
+                  .filter(a => {
+                    const matchesSearch = 
+                      a.name.toLowerCase().includes(searchQ.toLowerCase()) ||
+                      (a.sku && a.sku.toLowerCase().includes(searchQ.toLowerCase())) ||
+                      a.id.toLowerCase().includes(searchQ.toLowerCase());
+                    
+                    const matchesLocation = locationFilter === '' || Number(a.location_id) === Number(locationFilter);
+                    const matchesStatus = statusFilter === '' || a.status === statusFilter;
+                    
+                    return matchesSearch && matchesLocation && matchesStatus;
+                  })
+                  .map(a => {
+                    const isInPrintQueue = printQueue.some(item => item.id === a.id);
+                    return (
+                      <div key={a.id} className="mobile-asset-card panel">
+                        <div className="mobile-asset-card-header">
+                          <div>
+                            <h3 onClick={() => setActiveAsset(a)} style={{ cursor: 'pointer', color: 'white', margin: 0, fontSize: '1.1rem' }}>
+                              {a.name}
+                            </h3>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginTop: '2px' }}>
+                              ID: <span style={{ color: 'var(--accent-cyan)', fontFamily: 'monospace' }}>{a.id}</span> {a.sku && `| SKU: ${a.sku}`}
+                            </span>
+                          </div>
+                          <span className={`badge ${
+                            a.status === 'Available' ? 'badge-success' : 
+                            a.status === 'Low Stock' ? 'badge-warning' : 'badge-danger'
+                          }`}>
+                            {a.status}
+                          </span>
+                        </div>
+                        
+                        <div className="mobile-asset-card-body">
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '0.85rem' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Location:</span>
+                            <strong style={{ color: 'white' }}>{a.location_name || 'Unassigned'}</strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Stock Level:</span>
+                            <div className="quantity-adjustment-group">
+                              <button 
+                                className="btn btn-circle"
+                                onClick={(e) => { e.stopPropagation(); handleQuickStockChange(a, 'CHECK_OUT'); }}
+                              >
+                                -
+                              </button>
+                              <span style={{ fontSize: '1.05rem', fontWeight: 'bold', color: 'white', minWidth: '36px', textAlign: 'center' }}>
+                                {a.quantity}
+                              </span>
+                              <button 
+                                className="btn btn-circle"
+                                onClick={(e) => { e.stopPropagation(); handleQuickStockChange(a, 'CHECK_IN'); }}
+                              >
+                                +
+                              </button>
+                              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{a.unit}</span>
+                            </div>
+                          </div>
+                          {a.min_quantity > 0 && (
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '6px' }}>
+                              <span>Minimum required:</span>
+                              <span>{a.min_quantity} {a.unit}</span>
+                            </div>
+                          )}
+                        </div>
+                        
+                        <div className="mobile-asset-card-footer">
+                          <button 
+                            className={`btn ${isInPrintQueue ? 'btn-success' : 'btn-secondary'}`} 
+                            style={{ fontSize: '0.8rem', padding: '6px 12px', flexGrow: 1, marginRight: '8px' }}
+                            onClick={() => togglePrintQueue(a)}
+                          >
+                            <Printer size={14} style={{ marginRight: '6px' }} />
+                            {isInPrintQueue ? "Queued" : "Queue Label"}
+                          </button>
+                          <button 
+                            className="btn btn-secondary btn-icon-only" 
+                            style={{ padding: '6px', marginRight: '6px' }}
+                            onClick={() => { setEditingAsset(a); setShowEditAsset(true); }}
+                          >
+                            <Edit size={14} />
+                          </button>
+                          <button 
+                            className="btn btn-secondary btn-icon-only" 
+                            style={{ padding: '6px', marginRight: '6px' }}
+                            onClick={() => setActiveAsset(a)}
+                          >
+                            <Info size={14} />
+                          </button>
+                          <button 
+                            className="btn btn-secondary btn-icon-only" 
+                            style={{ padding: '6px', color: 'var(--accent-rose)' }}
+                            onClick={() => handleDeleteAsset(a.id, a.name)}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                {assets.length === 0 && (
+                  <div className="panel" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-secondary)' }}>
+                    No assets registered yet. Click 'Create Asset' to add your first physical material.
+                  </div>
+                )}
               </div>
             </div>
 
@@ -2464,13 +2772,31 @@ function App() {
                   {printQueue.map(a => (
                     <div className="printable-label-card" key={a.id}>
                       <button className="label-remove-btn" onClick={() => togglePrintQueue(a)}><X size={16} /></button>
-                      <div style={{ width: '80px', height: '80px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'white', borderRadius: '4px' }}>
-                        <QrCodeImage value={a.id} size={70} />
+                      <div className="printable-label-card-content">
+                        <div style={{ width: '80px', height: '80px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'white', borderRadius: '4px', flexShrink: 0 }}>
+                          <QrCodeImage value={a.id} size={70} />
+                        </div>
+                        <div style={{ minWidth: 0, flexGrow: 1 }}>
+                          <h4 style={{ fontSize: '0.95rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'white', margin: 0 }}>{a.name}</h4>
+                          <p style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: 'var(--accent-cyan)', margin: '4px 0 2px' }}>{a.sku || a.id}</p>
+                          <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0 }}>{a.location_name || 'No Location'}</p>
+                        </div>
                       </div>
-                      <div style={{ minWidth: 0, flexGrow: 1 }}>
-                        <h4 style={{ fontSize: '0.95rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'white' }}>{a.name}</h4>
-                        <p style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: 'var(--accent-cyan)' }}>{a.sku || a.id}</p>
-                        <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{a.location_name || 'No Location'}</p>
+                      <div className="printable-label-card-actions">
+                        <button 
+                          className="btn btn-secondary" 
+                          style={{ padding: '4px 8px', fontSize: '0.75rem' }} 
+                          onClick={() => copyToClipboard(a.id)}
+                        >
+                          Copy QR Value
+                        </button>
+                        <button 
+                          className="btn btn-primary" 
+                          style={{ padding: '4px 8px', fontSize: '0.75rem' }} 
+                          onClick={() => downloadLabelImage(a)}
+                        >
+                          Download Image
+                        </button>
                       </div>
                     </div>
                   ))}
