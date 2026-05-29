@@ -21,7 +21,8 @@ import {
   ShieldAlert,
   Download,
   Settings,
-  Edit
+  Edit,
+  User
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import QRCode from 'qrcode';
@@ -106,9 +107,18 @@ function App() {
       return null;
     }
   });
-  const [loginUsername, setLoginUsername] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
+  const [loginUsername, setLoginUsername] = useState(() => localStorage.getItem('saved_username') || '');
+  const [loginPassword, setLoginPassword] = useState(() => localStorage.getItem('saved_password') || '');
   const [loginError, setLoginError] = useState('');
+  const [rememberMe, setRememberMe] = useState(() => localStorage.getItem('remember_me') !== 'false');
+
+  // Change Password Modal states
+  const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
+  const [changePasswordOld, setChangePasswordOld] = useState('');
+  const [changePasswordNew, setChangePasswordNew] = useState('');
+  const [changePasswordConfirm, setChangePasswordConfirm] = useState('');
+  const [changePasswordError, setChangePasswordError] = useState('');
+  const [changePasswordSuccess, setChangePasswordSuccess] = useState('');
 
   // Navigation & Core states
   const [currentView, setCurrentView] = useState('dashboard');
@@ -228,11 +238,28 @@ function App() {
       if (res.ok) {
         localStorage.setItem('auth_token', data.token);
         localStorage.setItem('auth_user', JSON.stringify(data.user));
+        
+        // Remember me logic
+        if (rememberMe) {
+          localStorage.setItem('saved_username', loginUsername);
+          localStorage.setItem('saved_password', loginPassword);
+          localStorage.setItem('remember_me', 'true');
+        } else {
+          localStorage.removeItem('saved_username');
+          localStorage.removeItem('saved_password');
+          localStorage.setItem('remember_me', 'false');
+        }
+
         setIsAuthenticated(true);
         setCurrentUser(data.user);
         setTxUser(data.user.name);
-        setLoginUsername('');
-        setLoginPassword('');
+        
+        // Keep inputs filled if remembered, otherwise clear
+        if (!rememberMe) {
+          setLoginUsername('');
+          setLoginPassword('');
+        }
+
         setTimeout(() => {
           fetchAssets();
           fetchLocations();
@@ -253,9 +280,27 @@ function App() {
           const dummyToken = 'offline_' + Date.now();
           localStorage.setItem('auth_token', dummyToken);
           localStorage.setItem('auth_user', JSON.stringify(match));
+
+          // Remember me logic for offline mode
+          if (rememberMe) {
+            localStorage.setItem('saved_username', loginUsername);
+            localStorage.setItem('saved_password', loginPassword);
+            localStorage.setItem('remember_me', 'true');
+          } else {
+            localStorage.removeItem('saved_username');
+            localStorage.removeItem('saved_password');
+            localStorage.setItem('remember_me', 'false');
+          }
+
           setIsAuthenticated(true);
           setCurrentUser(match);
           setTxUser(match.name);
+          
+          if (!rememberMe) {
+            setLoginUsername('');
+            setLoginPassword('');
+          }
+
           alert("Logged in offline mode using cached credentials.");
           return;
         }
@@ -280,6 +325,47 @@ function App() {
     localStorage.removeItem('auth_user');
     setIsAuthenticated(false);
     setCurrentUser(null);
+    // Restore saved credentials to fields if they exist
+    setLoginUsername(localStorage.getItem('saved_username') || '');
+    setLoginPassword(localStorage.getItem('saved_password') || '');
+  };
+
+  const handleChangePassword = async (e) => {
+    e.preventDefault();
+    setChangePasswordError('');
+    setChangePasswordSuccess('');
+
+    if (changePasswordNew !== changePasswordConfirm) {
+      setChangePasswordError('New passwords do not match.');
+      return;
+    }
+
+    try {
+      const res = await authFetch(`${API_BASE}/auth/change-password`, {
+        method: 'POST',
+        body: JSON.stringify({
+          oldPassword: changePasswordOld,
+          newPassword: changePasswordNew
+        })
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        setChangePasswordSuccess('Password updated successfully!');
+        setChangePasswordOld('');
+        setChangePasswordNew('');
+        setChangePasswordConfirm('');
+        setTimeout(() => {
+          setShowChangePasswordModal(false);
+          setChangePasswordSuccess('');
+        }, 1500);
+      } else {
+        setChangePasswordError(data.error || 'Failed to change password.');
+      }
+    } catch (err) {
+      console.error(err);
+      setChangePasswordError('Server communication error. Check connection.');
+    }
   };
 
   const checkConnection = async (url) => {
@@ -489,6 +575,10 @@ function App() {
       try {
         const { App: CapApp } = await import('@capacitor/app');
         handler = await CapApp.addListener('backButton', (data) => {
+          if (showChangePasswordModal) {
+            setShowChangePasswordModal(false);
+            return;
+          }
           if (showEditAsset) {
             setShowEditAsset(false);
             return;
@@ -538,6 +628,7 @@ function App() {
     showAddAsset, 
     showAddLocation, 
     showAddUser, 
+    showChangePasswordModal,
     currentView
   ]);
 
@@ -930,19 +1021,70 @@ function App() {
         const asset = assets.find(a => a.id === targetAssetId);
         if (asset) {
           const qtyChange = txType === 'CHECK_IN' ? txQty : (txType === 'CHECK_OUT' ? -txQty : 0);
-          const newQty = txType === 'STOCK_ADJUST' ? txQty : Math.max(0, asset.quantity + qtyChange);
-          const newStatus = calculateStatus(newQty, asset.min_quantity);
+          const isOfflineTransfer = (txType === 'CHECK_OUT' && txLocation && parseInt(txLocation, 10) !== asset.location_id);
+          
+          let updatedAssetsList = [];
           const destLocName = txLocation ? (locations.find(l => l.id.toString() === txLocation.toString())?.name || asset.location_name) : asset.location_name;
-          
-          const updatedAsset = { 
-            ...asset, 
-            quantity: newQty, 
-            status: newStatus,
-            location_id: txLocation || asset.location_id,
-            location_name: destLocName
-          };
-          
-          const updatedAssetsList = assets.map(a => a.id === targetAssetId ? updatedAsset : a);
+
+          if (isOfflineTransfer) {
+            const newSourceQty = Math.max(0, asset.quantity - txQty);
+            const sourceStatus = calculateStatus(newSourceQty, asset.min_quantity);
+            const updatedSourceAsset = {
+              ...asset,
+              quantity: newSourceQty,
+              status: sourceStatus
+            };
+
+            const destLocId = parseInt(txLocation, 10);
+            const matchingDestAsset = assets.find(a => a.name.toLowerCase() === asset.name.toLowerCase() && a.location_id === destLocId);
+
+            if (matchingDestAsset) {
+              const newDestQty = matchingDestAsset.quantity + txQty;
+              const destStatus = calculateStatus(newDestQty, matchingDestAsset.min_quantity);
+              const updatedDestAsset = {
+                ...matchingDestAsset,
+                quantity: newDestQty,
+                status: destStatus
+              };
+              updatedAssetsList = assets.map(a => {
+                if (a.id === targetAssetId) return updatedSourceAsset;
+                if (a.id === matchingDestAsset.id) return updatedDestAsset;
+                return a;
+              });
+            } else {
+              const newAssetId = 'qr-off-' + Date.now();
+              const initialDestQty = txQty;
+              const destStatus = calculateStatus(initialDestQty, asset.min_quantity);
+              const newOfflineAsset = {
+                id: newAssetId,
+                name: asset.name,
+                description: asset.description || '',
+                sku: asset.sku || '',
+                quantity: initialDestQty,
+                unit: asset.unit || 'pcs',
+                location_id: destLocId,
+                location_name: destLocName,
+                status: destStatus,
+                min_quantity: asset.min_quantity,
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+              };
+              updatedAssetsList = assets.map(a => a.id === targetAssetId ? updatedSourceAsset : a);
+              updatedAssetsList.push(newOfflineAsset);
+            }
+          } else {
+            const newQty = txType === 'STOCK_ADJUST' ? txQty : Math.max(0, asset.quantity + qtyChange);
+            const newStatus = calculateStatus(newQty, asset.min_quantity);
+            const updatedAsset = { 
+              ...asset, 
+              quantity: newQty, 
+              status: newStatus,
+              location_id: txLocation ? parseInt(txLocation, 10) : asset.location_id,
+              location_name: destLocName
+            };
+            updatedAssetsList = assets.map(a => a.id === targetAssetId ? updatedAsset : a);
+          }
+
           setAssets(updatedAssetsList);
           localStorage.setItem('cached_assets', JSON.stringify(updatedAssetsList));
           
@@ -1676,7 +1818,7 @@ function App() {
               />
             </div>
 
-            <div className="login-form-group" style={{ marginBottom: '28px' }}>
+            <div className="login-form-group" style={{ marginBottom: '16px' }}>
               <label className="login-form-label">Password</label>
               <input 
                 type="password" 
@@ -1688,9 +1830,26 @@ function App() {
               />
             </div>
 
+            <div className="login-form-group" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px', cursor: 'pointer', userSelect: 'none' }}>
+              <input 
+                type="checkbox" 
+                id="rememberMe"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                style={{ width: '16px', height: '16px', cursor: 'pointer', accentColor: 'var(--accent-indigo)' }}
+              />
+              <label htmlFor="rememberMe" style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', cursor: 'pointer' }}>
+                Remember credentials on this device
+              </label>
+            </div>
+
             <button type="submit" className="login-btn">
               Sign In
             </button>
+
+            <div style={{ textAlign: 'center', marginTop: '16px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+              Forgot password? Please ask an administrator to reset it for you.
+            </div>
           </form>
 
           <div className="login-download-apk-section" style={{ display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center', marginTop: '20px' }}>
@@ -1786,13 +1945,21 @@ function App() {
             <Printer size={18} />
             <span>Print Labels ({printQueue.length})</span>
           </li>
-          {isAdmin && (
+          {isAdmin ? (
             <li 
               className={`nav-item ${currentView === 'settings' ? 'active' : ''}`}
               onClick={() => { setCurrentView('settings'); stopScanner(); }}
             >
               <Settings size={18} />
               <span>Admin Settings</span>
+            </li>
+          ) : (
+            <li 
+              className={`nav-item ${currentView === 'settings' ? 'active' : ''}`}
+              onClick={() => { setCurrentView('settings'); stopScanner(); }}
+            >
+              <User size={18} />
+              <span>My Profile</span>
             </li>
           )}
         </ul>
@@ -1867,9 +2034,9 @@ function App() {
             <span>Admin</span>
           </div>
         ) : (
-          <div className={`mobile-nav-item ${currentView === 'printer' ? 'active' : ''}`} onClick={() => { setCurrentView('printer'); stopScanner(); }}>
-            <Printer />
-            <span>Labels</span>
+          <div className={`mobile-nav-item ${currentView === 'settings' ? 'active' : ''}`} onClick={() => { setCurrentView('settings'); stopScanner(); }}>
+            <User />
+            <span>Profile</span>
           </div>
         )}
       </nav>
@@ -3117,289 +3284,413 @@ function App() {
           </div>
         )}
 
-        {/* ----------------- VIEW: ADMIN SETTINGS ----------------- */}
-        {currentView === 'settings' && isAdmin && (
+        {/* ----------------- VIEW: ACCOUNT & SYSTEM SETTINGS ----------------- */}
+        {currentView === 'settings' && (
           <div>
             <div className="page-header">
               <div className="page-title-group">
-                <h1>Admin Control Panel</h1>
-                <p>System configuration, database maintenance, and manual overrides.</p>
+                <h1>{isAdmin ? 'System & Account Settings' : 'My Account Profile'}</h1>
+                <p>{isAdmin ? 'Manage your account credentials, direct overrides, database maintenance, and APK updates.' : 'View your profile and update your password.'}</p>
               </div>
             </div>
 
             <div className="dashboard-layout">
-              {/* Left Column: Manual Override & Config */}
+              {/* Left Column: Account Profile & Overrides */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                 
-                {/* Manual Stock Adjust Override */}
+                {/* Account Details Panel */}
                 <div className="panel">
                   <div className="panel-header">
-                    <h3 className="panel-title"><ShieldAlert size={18} style={{ color: 'var(--accent-rose)' }} /> Direct Stock Override</h3>
+                    <h3 className="panel-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <User size={18} /> My Account
+                    </h3>
                   </div>
-                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '16px' }}>
-                    As an administrator, you can manually set the absolute stock count for any asset. This generates an audit log transaction.
-                  </p>
                   
-                  <form onSubmit={handleManualStockOverride}>
-                    <div className="form-group">
-                      <label className="form-label">Select Material / Part</label>
-                      <select 
-                        className="form-control"
-                        value={manualOverrideAsset}
-                        onChange={(e) => {
-                          setManualOverrideAsset(e.target.value);
-                          const asset = assets.find(a => a.id === e.target.value);
-                          if (asset) setManualOverrideQty(asset.quantity);
-                        }}
-                        required
-                      >
-                        <option value="">-- Choose Asset --</option>
-                        {assets.map(a => (
-                          <option key={a.id} value={a.id}>{a.name} (Current: {a.quantity} {a.unit})</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div className="form-row">
-                      <div className="form-group">
-                        <label className="form-label">Absolute Quantity Target</label>
-                        <input 
-                          type="number"
-                          min="0"
-                          className="form-control"
-                          value={manualOverrideQty}
-                          onChange={(e) => setManualOverrideQty(parseInt(e.target.value, 10) || 0)}
-                          required
-                        />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                      <div className="avatar" style={{ width: '48px', height: '48px', fontSize: '1.25rem', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', backgroundColor: 'var(--accent-indigo)', color: 'white', fontWeight: 'bold' }}>
+                        {currentUser?.name ? currentUser.name.substring(0, 2).toUpperCase() : 'U'}
                       </div>
-                      <div className="form-group">
-                        <label className="form-label">Audit Notes / Authority Reason</label>
-                        <input 
-                          type="text"
-                          className="form-control"
-                          placeholder="e.g. Physical inventory count correction"
-                          value={manualOverrideNotes}
-                          onChange={(e) => setManualOverrideNotes(e.target.value)}
-                          required
-                        />
+                      <div>
+                        <h4 style={{ margin: 0, color: 'white', fontSize: '1.1rem' }}>{currentUser?.name || 'Unknown User'}</h4>
+                        <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                          System Role: <strong style={{ color: 'var(--accent-indigo)' }}>{currentUser?.role || 'Guest'}</strong>
+                        </span>
                       </div>
                     </div>
-
-                    <button type="submit" className="btn btn-danger" style={{ width: '100%', marginTop: '8px' }}>
-                      Force Stock Overwrite
-                    </button>
-                  </form>
-                </div>
-
-                {/* System Settings & Custom Alerts */}
-                <div className="panel">
-                  <div className="panel-header">
-                    <h3 className="panel-title"><Settings size={18} /> Global System Rules</h3>
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Default Alert Threshold Level (Global)</label>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <input 
-                        type="number" 
-                        className="form-control" 
-                        defaultValue="5" 
-                        style={{ maxWidth: '100px' }} 
-                      />
-                      <button className="btn btn-secondary" type="button" onClick={() => alert("Global default warning threshold configured to 5 units.")}>
-                        Apply Configuration
-                      </button>
-                    </div>
-                    <small style={{ color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
-                      Assets with quantities falling to or below this general value trigger a low stock alert (unless overridden in the specific asset model).
-                    </small>
-                  </div>
-                </div>
-
-              </div>
-
-              {/* Right Column: Database Maintenance Tools */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                
-                {/* SQLite Database Backup & Restore */}
-                <div className="panel">
-                  <div className="panel-header">
-                    <h3 className="panel-title"><Download size={18} style={{ color: 'var(--accent-teal)' }} /> Database Backup & Restore</h3>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    <div>
-                      <h4 style={{ fontSize: '0.9rem', marginBottom: '4px' }}>Download Database File</h4>
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '8px' }}>
-                        Download the active SQLite database file (`inventory.db`) directly.
-                      </p>
-                      <button className="btn btn-primary" style={{ width: '100%' }} onClick={handleDownloadDbBackup}>
-                        <Download size={14} /> Download SQLite DB
-                      </button>
-                    </div>
-
-                    <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-                      <h4 style={{ fontSize: '0.9rem', marginBottom: '4px', color: 'var(--accent-rose)' }}>Restore Database File</h4>
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '12px' }}>
-                        Upload a previously backed up `.db` file. This will fully replace the active inventory dataset.
-                      </p>
-                      <input 
-                        type="file" 
-                        accept=".db" 
-                        id="db-restore-upload"
-                        style={{ display: 'none' }} 
-                        onChange={(e) => handleRestoreDbBackup(e.target.files[0])}
-                      />
-                      <label 
-                        htmlFor="db-restore-upload" 
-                        className="btn btn-secondary" 
-                        style={{ 
-                          width: '100%', 
-                          display: 'flex', 
-                          alignItems: 'center', 
-                          justifyContent: 'center', 
-                          gap: '6px',
-                          cursor: 'pointer',
-                          padding: '10px'
-                        }}
-                      >
-                        <ArrowLeftRight size={14} /> Upload & Restore DB File
-                      </label>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Hosted Mobile Application APK */}
-                <div className="panel">
-                  <div className="panel-header">
-                    <h3 className="panel-title"><Package size={18} style={{ color: 'var(--accent-cyan)' }} /> Mobile App Hosting (APK)</h3>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    <div>
-                      <h4 style={{ fontSize: '0.9rem', marginBottom: '4px' }}>Upload Mobile APK</h4>
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '12px' }}>
-                        Upload the compiled Android `.apk` file so engineers can download it directly from the login page.
-                      </p>
-                      <input 
-                        type="file" 
-                        accept=".apk" 
-                        id="apk-upload-input"
-                        style={{ display: 'none' }} 
-                        onChange={(e) => handleUploadApk(e.target.files[0])}
-                      />
-                      <label 
-                        htmlFor="apk-upload-input" 
-                        className="btn btn-primary" 
-                        style={{ 
-                          width: '100%', 
-                          display: 'flex', 
-                          alignItems: 'center', 
-                          justifyContent: 'center', 
-                          gap: '6px',
-                          cursor: 'pointer',
-                          padding: '10px'
-                        }}
-                      >
-                        <Plus size={14} /> Select & Host APK File
-                      </label>
-                    </div>
-
-                    <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-                      <h4 style={{ fontSize: '0.9rem', marginBottom: '4px' }}>Public Download Endpoint</h4>
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '8px' }}>
-                        Share this URL with users to install the mobile companion application:
-                      </p>
-                      <input 
-                        type="text" 
-                        className="form-control" 
-                        readOnly 
-                        value={`${window.location.origin}/download-apk`} 
-                        onClick={(e) => { e.target.select(); document.execCommand('copy'); alert("Link copied!"); }}
-                        style={{ fontSize: '0.8rem', cursor: 'pointer', background: '#1e293b' }}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Git Update Center */}
-                <div className="panel">
-                  <div className="panel-header">
-                    <h3 className="panel-title"><History size={18} style={{ color: 'var(--accent-amber)' }} /> Git Update Center</h3>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                      Keep your public VPS installation synced with your GitHub repository code updates.
-                    </p>
                     
-                    <div style={{ background: '#1e293b', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px' }}>
-                      <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--accent-amber)', fontWeight: '600', display: 'block', marginBottom: '6px' }}>
-                        How to update VPS container:
-                      </span>
-                      <pre style={{ 
-                        margin: 0, 
-                        fontSize: '0.75rem', 
-                        fontFamily: 'monospace', 
-                        whiteSpace: 'pre-wrap', 
-                        color: 'var(--text-secondary)',
-                        lineHeight: '1.4'
-                      }}>
-                        # 1. SSH into CasaOS / VPS terminal{"\n"}
-                        cd /home/casaos/AssetManager{"\n"}{"\n"}
-                        # 2. Pull from master/main repo{"\n"}
-                        git pull origin master{"\n"}{"\n"}
-                        # 3. Rebuild and restart container{"\n"}
-                        docker-compose down{"\n"}
-                        docker-compose up -d --build
-                      </pre>
-                    </div>
-
-                    <button 
-                      className="btn btn-secondary" 
-                      onClick={() => alert("Checking repository state... System is fully up-to-date with your GitHub branch.")}
-                    >
-                      Check for Code Updates
-                    </button>
-                  </div>
-                </div>
-
-                {/* JSON Backup & Purging */}
-                <div className="panel">
-                  <div className="panel-header">
-                    <h3 className="panel-title"><ShieldAlert size={18} /> Legacy Maintenance Tools</h3>
-                  </div>
-                  
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    <div>
-                      <h4 style={{ fontSize: '0.9rem', marginBottom: '4px' }}>Backup Export (JSON)</h4>
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '8px' }}>
-                        Export database contents as flat JSON list records.
-                      </p>
-                      <button className="btn btn-secondary" style={{ width: '100%' }} onClick={handleExportBackup}>
-                        <Download size={14} /> Export Backup JSON
+                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginTop: '8px' }}>
+                      <button 
+                        type="button"
+                        className="btn btn-primary" 
+                        onClick={() => {
+                          setChangePasswordError('');
+                          setChangePasswordSuccess('');
+                          setChangePasswordOld('');
+                          setChangePasswordNew('');
+                          setChangePasswordConfirm('');
+                          setShowChangePasswordModal(true);
+                        }}
+                        style={{ padding: '8px 16px', fontSize: '0.85rem' }}
+                      >
+                        Change Password
                       </button>
-                    </div>
-
-                    <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-                      <h4 style={{ fontSize: '0.9rem', marginBottom: '4px' }}>Seed Mock Activity Feed</h4>
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '8px' }}>
-                        Populates mock checkout logs for interface demo testing.
-                      </p>
-                      <button className="btn btn-primary" style={{ width: '100%' }} onClick={handleSeedActivity}>
-                        <Plus size={14} /> Seed Test Activity Logs
-                      </button>
-                    </div>
-
-                    <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-                      <h4 style={{ fontSize: '0.9rem', marginBottom: '4px', color: 'var(--accent-rose)' }}>Purge Transaction History</h4>
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '8px' }}>
-                        Deletes all global audit logs from the transactions table.
-                      </p>
-                      <button className="btn btn-danger" style={{ width: '100%' }} onClick={handlePurgeLogs}>
-                        <Trash2 size={14} /> Purge Audit Logs
+                      <button 
+                        type="button"
+                        className="btn btn-secondary" 
+                        onClick={handleLogout}
+                        style={{ padding: '8px 16px', fontSize: '0.85rem', borderColor: 'var(--accent-rose)', color: 'var(--accent-rose)', background: 'transparent' }}
+                      >
+                        Sign Out
                       </button>
                     </div>
                   </div>
                 </div>
+
+                {/* Admin-only Panel Overrides */}
+                {isAdmin && (
+                  <>
+                    {/* Manual Stock Adjust Override */}
+                    <div className="panel">
+                      <div className="panel-header">
+                        <h3 className="panel-title"><ShieldAlert size={18} style={{ color: 'var(--accent-rose)' }} /> Direct Stock Override</h3>
+                      </div>
+                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '16px' }}>
+                        As an administrator, you can manually set the absolute stock count for any asset. This generates an audit log transaction.
+                      </p>
+                      
+                      <form onSubmit={handleManualStockOverride}>
+                        <div className="form-group">
+                          <label className="form-label">Select Material / Part</label>
+                          <select 
+                            className="form-control"
+                            value={manualOverrideAsset}
+                            onChange={(e) => {
+                              setManualOverrideAsset(e.target.value);
+                              const asset = assets.find(a => a.id === e.target.value);
+                              if (asset) setManualOverrideQty(asset.quantity);
+                            }}
+                            required
+                          >
+                            <option value="">-- Choose Asset --</option>
+                            {assets.map(a => (
+                              <option key={a.id} value={a.id}>{a.name} (Current: {a.quantity} {a.unit})</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="form-row">
+                          <div className="form-group">
+                            <label className="form-label">Absolute Quantity Target</label>
+                            <input 
+                              type="number"
+                              min="0"
+                              className="form-control"
+                              value={manualOverrideQty}
+                              onChange={(e) => setManualOverrideQty(parseInt(e.target.value, 10) || 0)}
+                              required
+                            />
+                          </div>
+                          <div className="form-group">
+                            <label className="form-label">Audit Notes / Authority Reason</label>
+                            <input 
+                              type="text"
+                              className="form-control"
+                              placeholder="e.g. Physical inventory count correction"
+                              value={manualOverrideNotes}
+                              onChange={(e) => setManualOverrideNotes(e.target.value)}
+                              required
+                            />
+                          </div>
+                        </div>
+
+                        <button type="submit" className="btn btn-danger" style={{ width: '100%', marginTop: '8px' }}>
+                          Force Stock Overwrite
+                        </button>
+                      </form>
+                    </div>
+
+                    {/* System Settings & Custom Alerts */}
+                    <div className="panel">
+                      <div className="panel-header">
+                        <h3 className="panel-title"><Settings size={18} /> Global System Rules</h3>
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Default Alert Threshold Level (Global)</label>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <input 
+                            type="number" 
+                            className="form-control" 
+                            defaultValue="5" 
+                            style={{ maxWidth: '100px' }} 
+                          />
+                          <button className="btn btn-secondary" type="button" onClick={() => alert("Global default warning threshold configured to 5 units.")}>
+                            Apply Configuration
+                          </button>
+                        </div>
+                        <small style={{ color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
+                          Assets with quantities falling to or below this general value trigger a low stock alert (unless overridden in the specific asset model).
+                        </small>
+                      </div>
+                    </div>
+                  </>
+                )}
 
               </div>
+
+              {/* Right Column: Database Maintenance Tools (Admin Only) */}
+              {isAdmin && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                  
+                  {/* SQLite Database Backup & Restore */}
+                  <div className="panel">
+                    <div className="panel-header">
+                      <h3 className="panel-title"><Download size={18} style={{ color: 'var(--accent-teal)' }} /> Database Backup & Restore</h3>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                      <div>
+                        <h4 style={{ fontSize: '0.9rem', marginBottom: '4px' }}>Download Database File</h4>
+                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '8px' }}>
+                          Download the active SQLite database file (`inventory.db`) directly.
+                        </p>
+                        <button className="btn btn-primary" style={{ width: '100%' }} onClick={handleDownloadDbBackup}>
+                          <Download size={14} /> Download SQLite DB
+                        </button>
+                      </div>
+
+                      <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+                        <h4 style={{ fontSize: '0.9rem', marginBottom: '4px', color: 'var(--accent-rose)' }}>Restore Database File</h4>
+                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '12px' }}>
+                          Upload a previously backed up `.db` file. This will fully replace the active inventory dataset.
+                        </p>
+                        <input 
+                          type="file" 
+                          accept=".db" 
+                          id="db-restore-upload"
+                          style={{ display: 'none' }} 
+                          onChange={(e) => handleRestoreDbBackup(e.target.files[0])}
+                        />
+                        <label 
+                          htmlFor="db-restore-upload" 
+                          className="btn btn-secondary" 
+                          style={{ 
+                            width: '100%', 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            justifyContent: 'center', 
+                            gap: '6px',
+                            cursor: 'pointer',
+                            padding: '10px'
+                          }}
+                        >
+                          <ArrowLeftRight size={14} /> Upload & Restore DB File
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Hosted Mobile Application APK */}
+                  <div className="panel">
+                    <div className="panel-header">
+                      <h3 className="panel-title"><Package size={18} style={{ color: 'var(--accent-cyan)' }} /> Mobile App Hosting (APK)</h3>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                      <div>
+                        <h4 style={{ fontSize: '0.9rem', marginBottom: '4px' }}>Upload Mobile APK</h4>
+                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '12px' }}>
+                          Upload the compiled Android `.apk` file so engineers can download it directly from the login page.
+                        </p>
+                        <input 
+                          type="file" 
+                          accept=".apk" 
+                          id="apk-upload-input"
+                          style={{ display: 'none' }} 
+                          onChange={(e) => handleUploadApk(e.target.files[0])}
+                        />
+                        <label 
+                          htmlFor="apk-upload-input" 
+                          className="btn btn-primary" 
+                          style={{ 
+                            width: '100%', 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            justifyContent: 'center', 
+                            gap: '6px',
+                            cursor: 'pointer',
+                            padding: '10px'
+                          }}
+                        >
+                          <Plus size={14} /> Select & Host APK File
+                        </label>
+                      </div>
+
+                      <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+                        <h4 style={{ fontSize: '0.9rem', marginBottom: '4px' }}>Public Download Endpoint</h4>
+                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '8px' }}>
+                          Share this URL with users to install the mobile companion application:
+                        </p>
+                        <input 
+                          type="text" 
+                          className="form-control" 
+                          readOnly 
+                          value={`${window.location.origin}/download-apk`} 
+                          onClick={(e) => { e.target.select(); document.execCommand('copy'); alert("Link copied!"); }}
+                          style={{ fontSize: '0.8rem', cursor: 'pointer', background: '#1e293b' }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Git Update Center */}
+                  <div className="panel">
+                    <div className="panel-header">
+                      <h3 className="panel-title"><History size={18} style={{ color: 'var(--accent-amber)' }} /> Git Update Center</h3>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                        Keep your public VPS installation synced with your GitHub repository code updates.
+                      </p>
+                      
+                      <div style={{ background: '#1e293b', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px' }}>
+                        <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--accent-amber)', fontWeight: '600', display: 'block', marginBottom: '6px' }}>
+                          How to update VPS container:
+                        </span>
+                        <pre style={{ 
+                          margin: 0, 
+                          fontSize: '0.75rem', 
+                          fontFamily: 'monospace', 
+                          whiteSpace: 'pre-wrap', 
+                          color: 'var(--text-secondary)',
+                          lineHeight: '1.4'
+                        }}>
+                          # 1. SSH into CasaOS / VPS terminal{"\n"}
+                          cd /home/casaos/AssetManager{"\n"}{"\n"}
+                          # 2. Pull from master/main repo{"\n"}
+                          git pull origin master{"\n"}{"\n"}
+                          # 3. Rebuild and restart container{"\n"}
+                          docker-compose down{"\n"}
+                          docker-compose up -d --build
+                        </pre>
+                      </div>
+
+                      <button 
+                        className="btn btn-secondary" 
+                        onClick={() => alert("Checking repository state... System is fully up-to-date with your GitHub branch.")}
+                      >
+                        Check for Code Updates
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* JSON Backup & Purging */}
+                  <div className="panel">
+                    <div className="panel-header">
+                      <h3 className="panel-title"><ShieldAlert size={18} /> Legacy Maintenance Tools</h3>
+                    </div>
+                    
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                      <div>
+                        <h4 style={{ fontSize: '0.9rem', marginBottom: '4px' }}>Backup Export (JSON)</h4>
+                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '8px' }}>
+                          Export database contents as flat JSON list records.
+                        </p>
+                        <button className="btn btn-secondary" style={{ width: '100%' }} onClick={handleExportBackup}>
+                          <Download size={14} /> Export Backup JSON
+                        </button>
+                      </div>
+
+                      <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+                        <h4 style={{ fontSize: '0.9rem', marginBottom: '4px' }}>Seed Mock Activity Feed</h4>
+                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '8px' }}>
+                          Populates mock checkout logs for interface demo testing.
+                        </p>
+                        <button className="btn btn-primary" style={{ width: '100%' }} onClick={handleSeedActivity}>
+                          <Plus size={14} /> Seed Test Activity Logs
+                        </button>
+                      </div>
+
+                      <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+                        <h4 style={{ fontSize: '0.9rem', marginBottom: '4px', color: 'var(--accent-rose)' }}>Purge Transaction History</h4>
+                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '8px' }}>
+                          Deletes all global audit logs from the transactions table.
+                        </p>
+                        <button className="btn btn-danger" style={{ width: '100%' }} onClick={handlePurgeLogs}>
+                          <Trash2 size={14} /> Purge Audit Logs
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Form Drawer Modal: Change Password */}
+        {showChangePasswordModal && (
+          <div className="drawer-backdrop" style={{ zIndex: 3001 }} onClick={() => setShowChangePasswordModal(false)}>
+            <div className="drawer" onClick={(e) => e.stopPropagation()}>
+              <div className="drawer-header">
+                <h2>Change Password</h2>
+                <button className="drawer-close" onClick={() => setShowChangePasswordModal(false)}><X size={20} /></button>
+              </div>
+              
+              <form onSubmit={handleChangePassword}>
+                {changePasswordError && (
+                  <div className="login-error-alert" style={{ marginBottom: '16px' }}>
+                    <AlertTriangle size={18} />
+                    <span>{changePasswordError}</span>
+                  </div>
+                )}
+                {changePasswordSuccess && (
+                  <div className="login-error-alert" style={{ marginBottom: '16px', borderColor: 'var(--accent-teal)', backgroundColor: 'rgba(20, 184, 166, 0.1)', color: 'var(--accent-teal)' }}>
+                    <CheckCircle size={18} />
+                    <span>{changePasswordSuccess}</span>
+                  </div>
+                )}
+
+                <div className="form-group">
+                  <label className="form-label">Current Password *</label>
+                  <input 
+                    type="password" 
+                    className="form-control" 
+                    required 
+                    placeholder="Enter current password"
+                    value={changePasswordOld}
+                    onChange={(e) => setChangePasswordOld(e.target.value)}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">New Password *</label>
+                  <input 
+                    type="password" 
+                    className="form-control" 
+                    required 
+                    placeholder="Enter new password"
+                    value={changePasswordNew}
+                    onChange={(e) => setChangePasswordNew(e.target.value)}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Confirm New Password *</label>
+                  <input 
+                    type="password" 
+                    className="form-control" 
+                    required 
+                    placeholder="Confirm new password"
+                    value={changePasswordConfirm}
+                    onChange={(e) => setChangePasswordConfirm(e.target.value)}
+                  />
+                </div>
+
+                <div style={{ marginTop: '24px', display: 'flex', gap: '12px' }}>
+                  <button type="submit" className="btn btn-primary" style={{ flexGrow: 1 }}>Update Password</button>
+                  <button type="button" className="btn btn-secondary" onClick={() => setShowChangePasswordModal(false)}>Cancel</button>
+                </div>
+              </form>
             </div>
           </div>
         )}

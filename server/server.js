@@ -332,6 +332,105 @@ app.post('/api/transactions', async (req, res) => {
       return res.status(400).json({ error: `Insufficient stock. Current inventory level is ${asset.quantity} ${asset.unit}.` });
     }
 
+    const changeVal = parseInt(quantity_change, 10) || 0;
+    const destLocationId = (location_id && location_id !== 'null' && location_id !== '') ? parseInt(location_id, 10) : null;
+    const isTransfer = (type === 'CHECK_OUT' || type === 'SALE') && 
+                       destLocationId && 
+                       destLocationId !== asset.location_id;
+
+    if (isTransfer) {
+      // 1. Subtract changeVal from source asset
+      const newSourceQty = asset.quantity - Math.abs(changeVal);
+      const sourceStatus = calculateStatus(newSourceQty, asset.min_quantity);
+
+      // Find location names for audit logging
+      const sourceLocRow = await dbGet('SELECT name FROM locations WHERE id = ?', [asset.location_id]);
+      const sourceLocationName = sourceLocRow ? sourceLocRow.name : 'Unknown Location';
+      const destLocRow = await dbGet('SELECT name FROM locations WHERE id = ?', [destLocationId]);
+      const destLocationName = destLocRow ? destLocRow.name : 'Unknown Location';
+
+      // Perform source asset updates
+      await dbRun(`
+        UPDATE assets 
+        SET quantity = ?, status = ?, updated_at = CURRENT_TIMESTAMP 
+        WHERE id = ?
+      `, [newSourceQty, sourceStatus, asset.id]);
+
+      await dbRun(`
+        INSERT INTO transactions (asset_id, type, quantity_change, location_id, user_name, notes)
+        VALUES (?, 'CHECK_OUT', ?, ?, ?, ?)
+      `, [
+        asset.id,
+        -Math.abs(changeVal),
+        asset.location_id,
+        user_name,
+        notes ? `${notes} (Transferred to ${destLocationName})` : `Transferred to ${destLocationName}`
+      ]);
+
+      // 2. Find if an asset with the same name already exists at the destination location
+      let destAsset = await dbGet(
+        'SELECT * FROM assets WHERE name = ? COLLATE NOCASE AND location_id = ?',
+        [asset.name, destLocationId]
+      );
+
+      if (destAsset) {
+        const newDestQty = destAsset.quantity + Math.abs(changeVal);
+        const destStatus = calculateStatus(newDestQty, destAsset.min_quantity);
+        await dbRun(
+          'UPDATE assets SET quantity = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+          [newDestQty, destStatus, destAsset.id]
+        );
+        await dbRun(`
+          INSERT INTO transactions (asset_id, type, quantity_change, location_id, user_name, notes)
+          VALUES (?, 'CHECK_IN', ?, ?, ?, ?)
+        `, [
+          destAsset.id,
+          Math.abs(changeVal),
+          destLocationId,
+          user_name,
+          notes ? `${notes} (Transferred from ${sourceLocationName})` : `Transferred from ${sourceLocationName}`
+        ]);
+      } else {
+        // Create new asset record at the destination
+        const newAssetId = 'qr-' + crypto.randomBytes(4).toString('hex');
+        const initialDestQty = Math.abs(changeVal);
+        const destStatus = calculateStatus(initialDestQty, asset.min_quantity);
+        await dbRun(`
+          INSERT INTO assets (id, name, description, sku, quantity, unit, location_id, status, min_quantity)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+          newAssetId,
+          asset.name,
+          asset.description || '',
+          asset.sku || '',
+          initialDestQty,
+          asset.unit || 'pcs',
+          destLocationId,
+          destStatus,
+          asset.min_quantity
+        ]);
+        await dbRun(`
+          INSERT INTO transactions (asset_id, type, quantity_change, location_id, user_name, notes)
+          VALUES (?, 'CHECK_IN', ?, ?, ?, ?)
+        `, [
+          newAssetId,
+          initialDestQty,
+          destLocationId,
+          user_name,
+          notes ? `${notes} (Transferred from ${sourceLocationName})` : `Transferred from ${sourceLocationName}`
+        ]);
+      }
+
+      // Return updated source asset
+      const updatedAsset = await dbGet(`
+        SELECT assets.*, locations.name as location_name 
+        FROM assets 
+        LEFT JOIN locations ON assets.location_id = locations.id
+        WHERE assets.id = ?
+      `, [asset.id]);
+      return res.json(updatedAsset);
+    }
+
     const status = calculateStatus(newQuantity, asset.min_quantity);
     const destLocation = location_id || asset.location_id;
 
@@ -560,6 +659,35 @@ app.post('/api/auth/logout', (req, res) => {
     activeSessions.delete(token);
   }
   res.json({ message: 'Logged out successfully' });
+});
+
+// POST /api/auth/change-password - Change current user's password
+app.post('/api/auth/change-password', async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Current password and new password are required' });
+    }
+
+    const dbUser = await dbGet('SELECT * FROM users WHERE id = ?', [req.user.id]);
+    if (!dbUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (!verifyPassword(currentPassword, dbUser.salt, dbUser.password_hash)) {
+      return res.status(400).json({ error: 'Incorrect current password' });
+    }
+
+    const { salt, hash } = hashPassword(newPassword);
+    await dbRun(
+      'UPDATE users SET password_hash = ?, salt = ? WHERE id = ?',
+      [hash, salt, req.user.id]
+    );
+
+    res.json({ message: 'Password updated successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // ----------------------------------------------------
