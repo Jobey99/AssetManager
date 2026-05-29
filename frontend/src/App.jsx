@@ -482,6 +482,65 @@ function App() {
     }
   }, [assets]);
 
+  // Native back button interceptor for Android
+  useEffect(() => {
+    let handler;
+    const setupBackButton = async () => {
+      try {
+        const { App: CapApp } = await import('@capacitor/app');
+        handler = await CapApp.addListener('backButton', (data) => {
+          if (showEditAsset) {
+            setShowEditAsset(false);
+            return;
+          }
+          if (showAddAsset) {
+            setShowAddAsset(false);
+            return;
+          }
+          if (showAddLocation) {
+            setShowAddLocation(false);
+            return;
+          }
+          if (showAddUser) {
+            setShowAddUser(false);
+            return;
+          }
+          if (activeAsset) {
+            setActiveAsset(null);
+            return;
+          }
+          if (scannedAsset) {
+            setScannedAsset(null);
+            return;
+          }
+          if (currentView !== 'assets' && currentView !== 'dashboard') {
+            setCurrentView('assets');
+            return;
+          }
+          CapApp.exitApp();
+        });
+      } catch (err) {
+        console.log("Capacitor App module not active (standard browser environment):", err);
+      }
+    };
+    
+    setupBackButton();
+    
+    return () => {
+      if (handler && handler.remove) {
+        handler.remove();
+      }
+    };
+  }, [
+    activeAsset, 
+    scannedAsset, 
+    showEditAsset, 
+    showAddAsset, 
+    showAddLocation, 
+    showAddUser, 
+    currentView
+  ]);
+
   // Admin and role definitions
   const isAdmin = currentUser?.role === 'Admin';
 
@@ -2088,13 +2147,17 @@ function App() {
                         .map(a => {
                           const isInPrintQueue = printQueue.some(item => item.id === a.id);
                           return (
-                            <tr key={a.id}>
+                            <tr 
+                              key={a.id} 
+                              style={{ cursor: 'pointer' }} 
+                              onClick={() => setActiveAsset(a)}
+                            >
                               <td style={{ fontFamily: 'monospace', fontWeight: '500', fontSize: '0.85rem' }}>
                                 <span style={{ color: 'var(--accent-cyan)' }}>{a.id}</span>
                                 {a.sku && <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.75rem' }}>SKU: {a.sku}</span>}
                               </td>
                               <td>
-                                <div style={{ fontWeight: '600', cursor: 'pointer', color: 'white' }} onClick={() => setActiveAsset(a)}>
+                                <div style={{ fontWeight: '600', color: 'white' }}>
                                   {a.name}
                                 </div>
                                 <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
@@ -2129,7 +2192,7 @@ function App() {
                                 <span className={`badge ${
                                   a.status === 'Available' ? 'badge-success' : 
                                   a.status === 'Low Stock' ? 'badge-warning' : 'badge-danger'
-                                }`}>
+                                }}`}>
                                   {a.status}
                                 </span>
                               </td>
@@ -2139,7 +2202,7 @@ function App() {
                                     className={`btn ${isInPrintQueue ? 'btn-success' : 'btn-secondary'} btn-icon-only`}
                                     style={{ padding: '6px' }}
                                     title={isInPrintQueue ? "Remove from printing" : "Add to print queue"}
-                                    onClick={() => togglePrintQueue(a)}
+                                    onClick={(e) => { e.stopPropagation(); togglePrintQueue(a); }}
                                   >
                                     <Printer size={16} />
                                   </button>
@@ -2147,23 +2210,15 @@ function App() {
                                     className="btn btn-secondary btn-icon-only" 
                                     style={{ padding: '6px' }}
                                     title="Edit asset parameters"
-                                    onClick={() => { setEditingAsset(a); setShowEditAsset(true); }}
+                                    onClick={(e) => { e.stopPropagation(); setEditingAsset(a); setShowEditAsset(true); }}
                                   >
                                     <Edit size={16} />
                                   </button>
                                   <button 
                                     className="btn btn-secondary btn-icon-only" 
-                                    style={{ padding: '6px' }}
-                                    title="View details / history"
-                                    onClick={() => setActiveAsset(a)}
-                                  >
-                                    <Info size={16} />
-                                  </button>
-                                  <button 
-                                    className="btn btn-secondary btn-icon-only" 
                                     style={{ padding: '6px', color: 'var(--accent-rose)' }} 
                                     title="Delete item"
-                                    onClick={() => handleDeleteAsset(a.id, a.name)}
+                                    onClick={(e) => { e.stopPropagation(); handleDeleteAsset(a.id, a.name); }}
                                   >
                                     <Trash2 size={16} />
                                   </button>
@@ -2202,10 +2257,15 @@ function App() {
                   .map(a => {
                     const isInPrintQueue = printQueue.some(item => item.id === a.id);
                     return (
-                      <div key={a.id} className="mobile-asset-card panel">
+                      <div 
+                        key={a.id} 
+                        className="mobile-asset-card panel" 
+                        onClick={() => setActiveAsset(a)}
+                        style={{ cursor: 'pointer' }}
+                      >
                         <div className="mobile-asset-card-header">
                           <div>
-                            <h3 onClick={() => setActiveAsset(a)} style={{ cursor: 'pointer', color: 'white', margin: 0, fontSize: '1.1rem' }}>
+                            <h3 style={{ color: 'white', margin: 0, fontSize: '1.1rem' }}>
                               {a.name}
                             </h3>
                             <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginTop: '2px' }}>
@@ -2258,7 +2318,7 @@ function App() {
                           <button 
                             className={`btn ${isInPrintQueue ? 'btn-success' : 'btn-secondary'}`} 
                             style={{ fontSize: '0.8rem', padding: '6px 12px', flexGrow: 1, marginRight: '8px' }}
-                            onClick={() => togglePrintQueue(a)}
+                            onClick={(e) => { e.stopPropagation(); togglePrintQueue(a); }}
                           >
                             <Printer size={14} style={{ marginRight: '6px' }} />
                             {isInPrintQueue ? "Queued" : "Queue Label"}
@@ -2266,21 +2326,14 @@ function App() {
                           <button 
                             className="btn btn-secondary btn-icon-only" 
                             style={{ padding: '6px', marginRight: '6px' }}
-                            onClick={() => { setEditingAsset(a); setShowEditAsset(true); }}
+                            onClick={(e) => { e.stopPropagation(); setEditingAsset(a); setShowEditAsset(true); }}
                           >
                             <Edit size={14} />
                           </button>
                           <button 
                             className="btn btn-secondary btn-icon-only" 
-                            style={{ padding: '6px', marginRight: '6px' }}
-                            onClick={() => setActiveAsset(a)}
-                          >
-                            <Info size={14} />
-                          </button>
-                          <button 
-                            className="btn btn-secondary btn-icon-only" 
                             style={{ padding: '6px', color: 'var(--accent-rose)' }}
-                            onClick={() => handleDeleteAsset(a.id, a.name)}
+                            onClick={(e) => { e.stopPropagation(); handleDeleteAsset(a.id, a.name); }}
                           >
                             <Trash2 size={14} />
                           </button>
