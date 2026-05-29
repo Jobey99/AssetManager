@@ -1418,6 +1418,10 @@ function App() {
         if (activeAsset && activeAsset.id === editingAsset.id) {
           setActiveAsset({ ...activeAsset, ...data });
         }
+        if (scannedAsset && scannedAsset.id === editingAsset.id) {
+          const updatedLocName = locations.find(l => String(l.id) === String(data.location_id))?.name || 'Unassigned';
+          setScannedAsset({ ...scannedAsset, ...data, location_name: updatedLocName });
+        }
         setShowEditAsset(false);
         setEditingAsset(null);
         alert(`Asset '${data.name}' updated successfully!`);
@@ -3366,15 +3370,26 @@ function App() {
                 
                 {scannedAsset ? (
                   <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px', gap: '12px', flexWrap: 'wrap' }}>
                       <div>
                         <span className="badge badge-info" style={{ marginBottom: '8px' }}>Asset Scanned Successfully</span>
                         <h2>{scannedAsset.name}</h2>
                         <p style={{ color: 'var(--text-secondary)', fontFamily: 'monospace', fontSize: '0.85rem' }}>Code: {scannedAsset.id}</p>
                       </div>
-                      <button className="btn btn-secondary btn-icon-only" onClick={() => { setScannedAsset(null); setScannerActive(true); }}>
-                        <X size={18} />
-                      </button>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <button 
+                          type="button"
+                          className="btn btn-secondary" 
+                          style={{ padding: '6px 12px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                          onClick={() => { setEditingAsset(scannedAsset); setShowEditAsset(true); }}
+                        >
+                          <Edit size={14} />
+                          Edit Location
+                        </button>
+                        <button className="btn btn-secondary btn-icon-only" onClick={() => { setScannedAsset(null); setScannerActive(true); }}>
+                          <X size={18} />
+                        </button>
+                      </div>
                     </div>
 
                     <div className="panel" style={{ backgroundColor: 'rgba(255,255,255,0.02)', padding: '16px', marginBottom: '20px' }}>
