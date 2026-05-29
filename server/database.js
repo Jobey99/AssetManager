@@ -81,6 +81,15 @@ async function initDatabase() {
     `);
 
     await dbRun(`
+      CREATE TABLE IF NOT EXISTS categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        description TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    await dbRun(`
       CREATE TABLE IF NOT EXISTS assets (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -239,6 +248,37 @@ async function initDatabase() {
         );
       }
       console.log('Seeded default assets.');
+    }
+
+    // 5. Seed default Categories if table is empty
+    const categoriesCount = await dbGet('SELECT COUNT(*) as count FROM categories');
+    if (categoriesCount.count === 0) {
+      const defaultCategories = [
+        { name: 'Cables', description: 'Power cords, network connections, patch leads, HDMI, etc.' },
+        { name: 'Adapters', description: 'Signal converters and cable adapters' },
+        { name: 'Fasteners', description: 'Screws, bolts, nuts, and washers' },
+        { name: 'Hardware', description: 'Physical components and chassis' },
+        { name: 'Uncategorized', description: 'Default category for new items' }
+      ];
+      for (const cat of defaultCategories) {
+        await dbRun('INSERT INTO categories (name, description) VALUES (?, ?)', [cat.name, cat.description]);
+      }
+      console.log('Seeded default categories.');
+    }
+
+    // 6. Migrate existing distinct asset categories to global categories table
+    try {
+      const distinctAssetCats = await dbAll("SELECT DISTINCT category FROM assets WHERE category IS NOT NULL AND category != ''");
+      for (const row of distinctAssetCats) {
+        try {
+          await dbRun('INSERT OR IGNORE INTO categories (name, description) VALUES (?, ?)', [row.category, 'Migrated from asset inventory']);
+        } catch (e) {
+          // Ignore UNIQUE conflicts
+        }
+      }
+      console.log('Completed distinct category migration from assets table.');
+    } catch (e) {
+      console.warn('Category migration warning:', e);
     }
 
   } catch (error) {

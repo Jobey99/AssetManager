@@ -22,7 +22,8 @@ import {
   Download,
   Settings,
   Edit,
-  User
+  User,
+  Folder
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import QRCode from 'qrcode';
@@ -134,6 +135,7 @@ function App() {
   const [currentView, setCurrentView] = useState('dashboard');
   const [assets, setAssets] = useState([]);
   const [locations, setLocations] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [users, setUsers] = useState([]);
   const [transactions, setTransactions] = useState([]);
   
@@ -192,6 +194,7 @@ function App() {
   const [showAddAsset, setShowAddAsset] = useState(false);
   const [showEditAsset, setShowEditAsset] = useState(false);
   const [showAddLocation, setShowAddLocation] = useState(false);
+  const [showAddCategory, setShowAddCategory] = useState(false);
   const [showAddUser, setShowAddUser] = useState(false);
   const [showEditUser, setShowEditUser] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
@@ -214,8 +217,9 @@ function App() {
   const [isSyncing, setIsSyncing] = useState(false);
 
   // Form inputs
-  const [newAsset, setNewAsset] = useState({ id: '', name: '', description: '', sku: '', quantity: 0, unit: 'pcs', location_id: '', min_quantity: 0 });
+  const [newAsset, setNewAsset] = useState({ id: '', name: '', description: '', sku: '', quantity: 0, unit: 'pcs', location_id: '', min_quantity: 0, category: 'Uncategorized' });
   const [newLocation, setNewLocation] = useState({ name: '', description: '' });
+  const [newCategory, setNewCategory] = useState({ name: '', description: '' });
   const [newUser, setNewUser] = useState({ name: '', role: 'Engineer', password: '' });
 
   // Custom fetch wrapper injecting authentication headers
@@ -282,6 +286,7 @@ function App() {
         setTimeout(() => {
           fetchAssets();
           fetchLocations();
+          fetchCategories();
           fetchUsers();
           fetchTransactions();
         }, 100);
@@ -452,6 +457,7 @@ function App() {
       fetchAssets();
       fetchTransactions();
       fetchLocations();
+      fetchCategories();
     }
   };
 
@@ -462,6 +468,7 @@ function App() {
       // Fetch functions will automatically use cache if the connection check failed
       fetchAssets();
       fetchLocations();
+      fetchCategories();
       fetchUsers();
       fetchTransactions();
     };
@@ -505,6 +512,21 @@ function App() {
       console.warn("Using cached locations:", e);
       const cached = localStorage.getItem('cached_locations');
       if (cached) setLocations(JSON.parse(cached));
+    }
+  };
+
+  const fetchCategories = async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/categories`);
+      if (res.ok) {
+        const data = await res.json();
+        setCategories(data);
+        localStorage.setItem('cached_categories', JSON.stringify(data));
+      }
+    } catch (e) {
+      console.warn("Using cached categories:", e);
+      const cached = localStorage.getItem('cached_categories');
+      if (cached) setCategories(JSON.parse(cached));
     }
   };
 
@@ -1472,6 +1494,46 @@ function App() {
     }
   };
 
+  const handleCreateCategory = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await authFetch(`${API_BASE}/categories`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newCategory)
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setCategories([...categories, data]);
+        setShowAddCategory(false);
+        setNewCategory({ name: '', description: '' });
+        alert(`Category '${data.name}' added successfully!`);
+      } else {
+        alert(data.error || "Failed to add category.");
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const handleDeleteCategory = async (id, name) => {
+    if (confirm(`Are you sure you want to delete the category '${name}'? All assets under this category will default to 'Uncategorized'.`)) {
+      try {
+        const res = await authFetch(`${API_BASE}/categories/${id}`, { method: 'DELETE' });
+        if (res.ok) {
+          setCategories(categories.filter(c => c.id !== id));
+          fetchAssets();
+          alert("Category deleted.");
+        } else {
+          const data = await res.json();
+          alert(data.error || "Failed to delete category.");
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  };
+
   const handleCreateUser = async (e) => {
     e.preventDefault();
     try {
@@ -1905,9 +1967,12 @@ function App() {
   };
 
   const allCategories = React.useMemo(() => {
-    const cats = new Set(assets.map(a => a.category || 'Uncategorized'));
+    const cats = new Set(categories.map(c => c.name));
+    assets.forEach(a => {
+      cats.add(a.category || 'Uncategorized');
+    });
     return Array.from(cats).sort();
-  }, [assets]);
+  }, [categories, assets]);
 
   const groupedAssets = React.useMemo(() => {
     const groups = {};
@@ -3168,13 +3233,27 @@ function App() {
                       </div>
                       <div className="form-group">
                         <label className="form-label">Category</label>
-                        <input 
-                          type="text" 
-                          className="form-control" 
-                          placeholder="e.g. Cables, Tools, Components"
-                          value={newAsset.category}
-                          onChange={(e) => setNewAsset({ ...newAsset, category: e.target.value })}
-                        />
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <select 
+                            className="form-control" 
+                            value={newAsset.category || 'Uncategorized'}
+                            onChange={(e) => setNewAsset({ ...newAsset, category: e.target.value })}
+                            style={{ flexGrow: 1 }}
+                          >
+                            {categories.map(c => (
+                              <option key={c.id} value={c.name}>{c.name}</option>
+                            ))}
+                          </select>
+                          <button 
+                            type="button" 
+                            className="btn btn-secondary btn-icon-only"
+                            style={{ padding: '0 12px', minWidth: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                            onClick={() => setShowAddCategory(true)}
+                            title="Add global category"
+                          >
+                            <Plus size={16} />
+                          </button>
+                        </div>
                       </div>
                     </div>
 
@@ -3290,12 +3369,27 @@ function App() {
                       </div>
                       <div className="form-group">
                         <label className="form-label">Category</label>
-                        <input 
-                          type="text" 
-                          className="form-control" 
-                          value={editingAsset.category || ''}
-                          onChange={(e) => setEditingAsset({ ...editingAsset, category: e.target.value })}
-                        />
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <select 
+                            className="form-control" 
+                            value={editingAsset.category || 'Uncategorized'}
+                            onChange={(e) => setEditingAsset({ ...editingAsset, category: e.target.value })}
+                            style={{ flexGrow: 1 }}
+                          >
+                            {categories.map(c => (
+                              <option key={c.id} value={c.name}>{c.name}</option>
+                            ))}
+                          </select>
+                          <button 
+                            type="button" 
+                            className="btn btn-secondary btn-icon-only"
+                            style={{ padding: '0 12px', minWidth: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                            onClick={() => setShowAddCategory(true)}
+                            title="Add global category"
+                          >
+                            <Plus size={16} />
+                          </button>
+                        </div>
                       </div>
                     </div>
 
@@ -4109,6 +4203,63 @@ function App() {
                         </small>
                       </div>
                     </div>
+
+                    {/* Category Manager (Admin Only) */}
+                    <div className="panel">
+                      <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <h3 className="panel-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <Folder size={18} style={{ color: 'var(--accent-indigo)' }} /> Global Categories
+                        </h3>
+                        <button 
+                          className="btn btn-secondary btn-sm"
+                          style={{ padding: '4px 8px', fontSize: '0.75rem' }}
+                          onClick={() => setShowAddCategory(true)}
+                        >
+                          + New Category
+                        </button>
+                      </div>
+                      
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '350px', overflowY: 'auto' }}>
+                        {categories.map(cat => (
+                          <div 
+                            key={cat.id} 
+                            style={{ 
+                              display: 'flex', 
+                              justifyContent: 'space-between', 
+                              alignItems: 'center', 
+                              padding: '8px 12px', 
+                              background: 'rgba(255,255,255,0.03)', 
+                              border: '1px solid rgba(255,255,255,0.05)',
+                              borderRadius: '6px' 
+                            }}
+                          >
+                            <div style={{ flexGrow: 1, minWidth: 0, paddingRight: '8px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                <strong style={{ color: 'white', fontSize: '0.85rem' }}>{cat.name}</strong>
+                                <span className="badge badge-info" style={{ fontSize: '0.7rem', padding: '1px 5px' }}>
+                                  {cat.asset_count || 0} {cat.asset_count === 1 ? 'item' : 'items'}
+                                </span>
+                              </div>
+                              {cat.description && (
+                                <p style={{ margin: '2px 0 0 0', fontSize: '0.75rem', color: 'var(--text-secondary)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                                  {cat.description}
+                                </p>
+                              )}
+                            </div>
+                            {cat.name.toLowerCase() !== 'uncategorized' && (
+                              <button 
+                                className="btn btn-circle btn-sm btn-icon-only" 
+                                style={{ color: 'var(--accent-rose)', border: 'none', background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                onClick={() => handleDeleteCategory(cat.id, cat.name)}
+                                title="Delete global category"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   </>
                 )}
 
@@ -4365,6 +4516,47 @@ function App() {
                 <div style={{ marginTop: '24px', display: 'flex', gap: '12px' }}>
                   <button type="submit" className="btn btn-primary" style={{ flexGrow: 1 }}>Update Password</button>
                   <button type="button" className="btn btn-secondary" onClick={() => setShowChangePasswordModal(false)}>Cancel</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Modal: Add Category */}
+        {showAddCategory && (
+          <div className="drawer-backdrop" onClick={() => setShowAddCategory(false)}>
+            <div className="drawer" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '400px' }}>
+              <div className="drawer-header">
+                <h2>Add Global Category</h2>
+                <button className="drawer-close" onClick={() => setShowAddCategory(false)}><X size={20} /></button>
+              </div>
+              
+              <form onSubmit={handleCreateCategory}>
+                <div className="form-group">
+                  <label className="form-label">Category Name *</label>
+                  <input 
+                    type="text" 
+                    className="form-control" 
+                    required 
+                    placeholder="e.g. Test Instruments, Fiber Optic"
+                    value={newCategory.name}
+                    onChange={(e) => setNewCategory({ ...newCategory, name: e.target.value })}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Description</label>
+                  <textarea 
+                    className="form-control" 
+                    placeholder="e.g. Spectrum analyzers, oscilloscopes, meters..."
+                    value={newCategory.description}
+                    onChange={(e) => setNewCategory({ ...newCategory, description: e.target.value })}
+                  />
+                </div>
+
+                <div style={{ marginTop: '24px', display: 'flex', gap: '12px' }}>
+                  <button type="submit" className="btn btn-primary" style={{ flexGrow: 1 }}>Add Category</button>
+                  <button type="button" className="btn btn-secondary" onClick={() => setShowAddCategory(false)}>Cancel</button>
                 </div>
               </form>
             </div>

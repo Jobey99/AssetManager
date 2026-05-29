@@ -133,7 +133,7 @@ app.get('/api/assets/:id', async (req, res) => {
 // POST /api/assets - Create a new asset
 app.post('/api/assets', async (req, res) => {
   try {
-    let { id, name, description, sku, quantity, unit, location_id, min_quantity } = req.body;
+    let { id, name, description, sku, quantity, unit, location_id, min_quantity, category } = req.body;
     
     if (!name) {
       return res.status(400).json({ error: 'Asset name is required' });
@@ -155,9 +155,9 @@ app.post('/api/assets', async (req, res) => {
     const status = calculateStatus(quantity, min_quantity);
 
     await dbRun(`
-      INSERT INTO assets (id, name, description, sku, quantity, unit, location_id, status, min_quantity)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [id, name, description || '', sku || '', quantity, unit || 'pcs', location_id || null, status, min_quantity]);
+      INSERT INTO assets (id, name, description, sku, quantity, unit, location_id, status, min_quantity, category)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [id, name, description || '', sku || '', quantity, unit || 'pcs', location_id || null, status, min_quantity, category || 'Uncategorized']);
 
     // Record initial transaction
     if (quantity > 0) {
@@ -178,7 +178,7 @@ app.post('/api/assets', async (req, res) => {
 app.put('/api/assets/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, sku, unit, location_id, min_quantity } = req.body;
+    const { name, description, sku, unit, location_id, min_quantity, category } = req.body;
 
     const currentAsset = await dbGet('SELECT * FROM assets WHERE id = ?', [id]);
     if (!currentAsset) {
@@ -193,7 +193,7 @@ app.put('/api/assets/:id', async (req, res) => {
 
     await dbRun(`
       UPDATE assets 
-      SET name = ?, description = ?, sku = ?, unit = ?, location_id = ?, min_quantity = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+      SET name = ?, description = ?, sku = ?, unit = ?, location_id = ?, min_quantity = ?, status = ?, category = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `, [
       finalName,
@@ -203,6 +203,7 @@ app.put('/api/assets/:id', async (req, res) => {
       location_id !== undefined ? location_id : currentAsset.location_id,
       minQtyVal,
       newStatus,
+      category !== undefined ? category : currentAsset.category,
       id
     ]);
 
@@ -280,6 +281,61 @@ app.delete('/api/locations/:id', async (req, res) => {
       return res.status(404).json({ error: 'Location not found' });
     }
     res.json({ message: 'Location deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Category Endpoints
+app.get('/api/categories', async (req, res) => {
+  try {
+    const categories = await dbAll(`
+      SELECT categories.*, COUNT(assets.id) as asset_count 
+      FROM categories 
+      LEFT JOIN assets ON categories.name = assets.category
+      GROUP BY categories.id
+      ORDER BY categories.name ASC
+    `);
+    res.json(categories);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/categories', async (req, res) => {
+  try {
+    const { name, description } = req.body;
+    if (!name) {
+      return res.status(400).json({ error: 'Category name is required' });
+    }
+    const trimmedName = name.trim();
+    if (trimmedName.toLowerCase() === 'uncategorized') {
+      return res.status(400).json({ error: 'Category "Uncategorized" is a reserved default.' });
+    }
+    const result = await dbRun('INSERT INTO categories (name, description) VALUES (?, ?)', [trimmedName, description || '']);
+    const newCategory = await dbGet('SELECT * FROM categories WHERE id = ?', [result.id]);
+    res.status(201).json(newCategory);
+  } catch (error) {
+    if (error.message.includes('UNIQUE constraint failed')) {
+      return res.status(400).json({ error: 'A category with this name already exists.' });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/categories/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const category = await dbGet('SELECT * FROM categories WHERE id = ?', [id]);
+    if (!category) {
+      return res.status(404).json({ error: 'Category not found' });
+    }
+    if (category.name.toLowerCase() === 'uncategorized') {
+      return res.status(400).json({ error: 'The default category "Uncategorized" cannot be deleted.' });
+    }
+    await dbRun("UPDATE assets SET category = 'Uncategorized' WHERE category = ?", [category.name]);
+    await dbRun('DELETE FROM categories WHERE id = ?', [id]);
+    res.json({ message: 'Category deleted successfully' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
