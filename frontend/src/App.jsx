@@ -43,7 +43,11 @@ function QrCodeImage({ value, size = 150 }) {
 
   useEffect(() => {
     if (value) {
-      QRCode.toDataURL(value, { 
+      const qrValue = value.startsWith('http://') || value.startsWith('https://')
+        ? value
+        : `https://assets.josh-green.uk/?id=${encodeURIComponent(value)}`;
+
+      QRCode.toDataURL(qrValue, { 
         width: size, 
         margin: 1,
         color: {
@@ -130,6 +134,8 @@ function App() {
   const [scannedAsset, setScannedAsset] = useState(null);
   const [scanError, setScanError] = useState('');
   const [manualCode, setManualCode] = useState('');
+  const [availableCameras, setAvailableCameras] = useState([]);
+  const [currentCameraId, setCurrentCameraId] = useState(null);
   const scannerRef = useRef(null);
 
   // Quick Transaction Form State
@@ -458,6 +464,23 @@ function App() {
     }
   }, [activeAsset]);
 
+  // URL Deep-linking scanner auto-open
+  useEffect(() => {
+    if (assets.length > 0) {
+      const params = new URLSearchParams(window.location.search);
+      const urlAssetId = params.get('id') || params.get('assetId');
+      if (urlAssetId) {
+        const match = assets.find(a => a.id.toLowerCase() === urlAssetId.toLowerCase());
+        if (match) {
+          setActiveAsset(match);
+          // Clean the query parameters from browser URL bar without reloading
+          const newUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
+          window.history.replaceState({ path: newUrl }, '', newUrl);
+        }
+      }
+    }
+  }, [assets]);
+
   // Admin and role definitions
   const isAdmin = currentUser?.role === 'Admin';
 
@@ -468,31 +491,108 @@ function App() {
       scannerRef.current = html5QrCode;
       setScanError('');
 
-      html5QrCode.start(
-        { facingMode: "environment" },
-        {
-          fps: 10,
-          qrbox: (width, height) => {
-            const size = Math.min(width, height) * 0.7;
-            return { width: size, height: size };
+      const startWithFallback = () => {
+        html5QrCode.start(
+          { facingMode: "environment" },
+          {
+            fps: 10,
+            qrbox: (width, height) => {
+              const size = Math.min(width, height) * 0.7;
+              return { width: size, height: size };
+            }
+          },
+          (decodedText) => {
+            handleAssetScanned(decodedText);
+          },
+          (errorMessage) => {}
+        ).catch(err => {
+          console.error("Camera fail:", err);
+          setScanError("Unable to access camera. Make sure camera permissions are enabled, or use the manual entry field below.");
+        });
+      };
+
+      if (currentCameraId) {
+        // If we already have a selected camera ID from a previous switch or load
+        html5QrCode.start(
+          currentCameraId,
+          {
+            fps: 10,
+            qrbox: (width, height) => {
+              const size = Math.min(width, height) * 0.7;
+              return { width: size, height: size };
+            }
+          },
+          (decodedText) => {
+            handleAssetScanned(decodedText);
+          },
+          (errorMessage) => {}
+        ).catch(err => {
+          console.warn("Starting with selected camera failed, trying fallback:", err);
+          startWithFallback();
+        });
+      } else {
+        // First-time load: search for best back camera
+        Html5Qrcode.getCameras().then(devices => {
+          if (devices && devices.length > 0) {
+            setAvailableCameras(devices);
+            
+            // Find back cameras
+            const backCameras = devices.filter(device => {
+              const label = device.label.toLowerCase();
+              return label.includes('back') || label.includes('rear') || label.includes('environment') || label.includes('main');
+            });
+
+            let selectedCameraId = null;
+            if (backCameras.length > 0) {
+              // Try to skip macro, ultra, wide, 0.6x, depth, zoom
+              const mainBackCamera = backCameras.find(device => {
+                const label = device.label.toLowerCase();
+                return !label.includes('wide') && 
+                       !label.includes('ultra') && 
+                       !label.includes('0.6') && 
+                       !label.includes('macro') && 
+                       !label.includes('depth') &&
+                       !label.includes('zoom');
+              });
+              selectedCameraId = mainBackCamera ? mainBackCamera.id : backCameras[0].id;
+            } else {
+              // Default to last device in list (often main rear camera on mobile)
+              selectedCameraId = devices[devices.length - 1].id;
+            }
+
+            setCurrentCameraId(selectedCameraId);
+
+            html5QrCode.start(
+              selectedCameraId,
+              {
+                fps: 10,
+                qrbox: (width, height) => {
+                  const size = Math.min(width, height) * 0.7;
+                  return { width: size, height: size };
+                }
+              },
+              (decodedText) => {
+                handleAssetScanned(decodedText);
+              },
+              (errorMessage) => {}
+            ).catch(err => {
+              console.warn("Start with selected camera failed, trying fallback:", err);
+              startWithFallback();
+            });
+          } else {
+            startWithFallback();
           }
-        },
-        (decodedText) => {
-          handleAssetScanned(decodedText);
-        },
-        (errorMessage) => {
-          // silent camera search
-        }
-      ).catch(err => {
-        console.error("Camera fail:", err);
-        setScanError("Unable to access camera. Make sure camera permissions are enabled, or use the manual entry field below.");
-      });
+        }).catch(err => {
+          console.warn("Error getting cameras list, trying fallback:", err);
+          startWithFallback();
+        });
+      }
     }
 
     return () => {
       stopScanner();
     };
-  }, [currentView, scannerActive, scannedAsset]);
+  }, [currentView, scannerActive, scannedAsset, currentCameraId]);
 
   const stopScanner = () => {
     if (scannerRef.current) {
@@ -508,7 +608,65 @@ function App() {
     }
   };
 
-  const handleAssetScanned = async (qrId) => {
+  const handleCameraSwitch = async () => {
+    if (availableCameras.length <= 1 || !scannerRef.current) return;
+    const currentIndex = availableCameras.findIndex(d => d.id === currentCameraId);
+    const nextIndex = (currentIndex + 1) % availableCameras.length;
+    const nextCamera = availableCameras[nextIndex];
+    setCurrentCameraId(nextCamera.id);
+    
+    // Stop and restart with new ID
+    stopScanner();
+    // Wait a brief moment, then start with the new camera ID
+    setTimeout(() => {
+      if (scannerActive && currentView === 'scanner') {
+        const html5QrCode = new Html5Qrcode("qr-reader");
+        scannerRef.current = html5QrCode;
+        html5QrCode.start(
+          nextCamera.id,
+          {
+            fps: 10,
+            qrbox: (width, height) => {
+              const size = Math.min(width, height) * 0.7;
+              return { width: size, height: size };
+            }
+          },
+          (decodedText) => {
+            handleAssetScanned(decodedText);
+          },
+          (errorMessage) => {}
+        ).catch(err => {
+          console.error("Camera fail:", err);
+          setScanError("Failed to switch camera.");
+        });
+      }
+    }, 300);
+  };
+
+  const extractAssetId = (text) => {
+    if (!text) return '';
+    const trimmed = text.trim();
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      try {
+        const url = new URL(trimmed);
+        const idParam = url.searchParams.get('id') || url.searchParams.get('assetId');
+        if (idParam) {
+          return idParam;
+        }
+        const segments = url.pathname.split('/').filter(Boolean);
+        if (segments.length > 0) {
+          return segments[segments.length - 1];
+        }
+      } catch (err) {
+        console.error("Failed to parse URL in scanned text:", err);
+      }
+    }
+    return trimmed;
+  };
+
+  const handleAssetScanned = async (rawText) => {
+    const qrId = extractAssetId(rawText);
+    if (!qrId) return;
     stopScanner();
     try {
       const res = await authFetch(`${API_BASE}/assets/${qrId}`);
@@ -784,7 +942,11 @@ function App() {
   // Export label details as high quality image
   const downloadLabelImage = async (asset) => {
     try {
-      const qrUrl = await QRCode.toDataURL(asset.id, { 
+      const qrValue = asset.id.startsWith('http://') || asset.id.startsWith('https://')
+        ? asset.id
+        : `https://assets.josh-green.uk/?id=${encodeURIComponent(asset.id)}`;
+
+      const qrUrl = await QRCode.toDataURL(qrValue, { 
         margin: 1, 
         width: 300,
         color: {
@@ -2419,13 +2581,22 @@ function App() {
                             <div className="scanner-laser"></div>
                           </div>
                         </div>
-                        <button 
-                          className="btn btn-secondary" 
-                          style={{ margin: '16px auto 0 auto', display: 'block' }}
-                          onClick={() => setScannerActive(false)}
-                        >
-                          Disable Camera Scan
-                        </button>
+                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginTop: '16px' }}>
+                          <button 
+                            className="btn btn-secondary" 
+                            onClick={() => setScannerActive(false)}
+                          >
+                            Disable Camera Scan
+                          </button>
+                          {availableCameras.length > 1 && (
+                            <button 
+                              className="btn btn-secondary" 
+                              onClick={handleCameraSwitch}
+                            >
+                              Switch Camera
+                            </button>
+                          )}
+                        </div>
                       </div>
                     ) : (
                       <div style={{ textAlign: 'center', padding: '40px 0' }}>
