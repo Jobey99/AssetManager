@@ -54,6 +54,40 @@ function calculateStatus(quantity, minQuantity) {
   return 'Available';
 }
 
+// Helper to calculate status globally for a SKU/Name group and sync all matching database records
+async function syncGlobalStatus(sku, name) {
+  try {
+    let query = 'SELECT * FROM assets WHERE 1=0';
+    const params = [];
+    
+    if (sku && sku.trim() !== '') {
+      query = 'SELECT * FROM assets WHERE sku = ? COLLATE NOCASE';
+      params.push(sku.trim());
+    } else if (name && name.trim() !== '') {
+      query = 'SELECT * FROM assets WHERE name = ? COLLATE NOCASE';
+      params.push(name.trim());
+    } else {
+      return; // nothing to sync
+    }
+
+    const matches = await dbAll(query, params);
+    if (matches.length === 0) return;
+
+    const totalQty = matches.reduce((sum, item) => sum + item.quantity, 0);
+    const maxMinQty = matches.reduce((max, item) => Math.max(max, item.min_quantity || 0), 0);
+    const newStatus = calculateStatus(totalQty, maxMinQty);
+
+    // Update status for all matches in the database
+    if (sku && sku.trim() !== '') {
+      await dbRun('UPDATE assets SET status = ? WHERE sku = ? COLLATE NOCASE', [newStatus, sku.trim()]);
+    } else {
+      await dbRun('UPDATE assets SET status = ? WHERE name = ? COLLATE NOCASE', [newStatus, name.trim()]);
+    }
+  } catch (err) {
+    console.error('Error syncing global status:', err);
+  }
+}
+
 // ----------------------------------------------------
 // API ROUTES
 // ----------------------------------------------------
@@ -165,6 +199,8 @@ app.post('/api/assets', async (req, res) => {
       `, [id, quantity, location_id || null]);
     }
 
+    await syncGlobalStatus(sku || '', name);
+
     const createdAsset = await dbGet('SELECT * FROM assets WHERE id = ?', [id]);
     res.status(201).json(createdAsset);
   } catch (error) {
@@ -186,20 +222,28 @@ app.put('/api/assets/:id', async (req, res) => {
     const minQtyVal = min_quantity !== undefined ? parseInt(min_quantity, 10) : currentAsset.min_quantity;
     const newStatus = calculateStatus(currentAsset.quantity, minQtyVal);
 
+    const finalName = name || currentAsset.name;
+    const finalSku = sku !== undefined ? sku : currentAsset.sku;
+
     await dbRun(`
       UPDATE assets 
       SET name = ?, description = ?, sku = ?, unit = ?, location_id = ?, min_quantity = ?, status = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `, [
-      name || currentAsset.name,
+      finalName,
       description !== undefined ? description : currentAsset.description,
-      sku !== undefined ? sku : currentAsset.sku,
+      finalSku,
       unit || currentAsset.unit,
       location_id !== undefined ? location_id : currentAsset.location_id,
       minQtyVal,
       newStatus,
       id
     ]);
+
+    await syncGlobalStatus(finalSku, finalName);
+    if (currentAsset.sku !== finalSku || currentAsset.name !== finalName) {
+      await syncGlobalStatus(currentAsset.sku, currentAsset.name);
+    }
 
     const updatedAsset = await dbGet('SELECT * FROM assets WHERE id = ?', [id]);
     res.json(updatedAsset);
@@ -212,10 +256,14 @@ app.put('/api/assets/:id', async (req, res) => {
 app.delete('/api/assets/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const result = await dbRun('DELETE FROM assets WHERE id = ?', [id]);
-    if (result.changes === 0) {
+    const currentAsset = await dbGet('SELECT * FROM assets WHERE id = ?', [id]);
+    if (!currentAsset) {
       return res.status(404).json({ error: 'Asset not found' });
     }
+
+    await dbRun('DELETE FROM assets WHERE id = ?', [id]);
+    await syncGlobalStatus(currentAsset.sku, currentAsset.name);
+
     res.json({ message: 'Asset deleted successfully' });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -421,6 +469,9 @@ app.post('/api/transactions', async (req, res) => {
         ]);
       }
 
+      // Sync global status before returning
+      await syncGlobalStatus(asset.sku, asset.name);
+
       // Return updated source asset
       const updatedAsset = await dbGet(`
         SELECT assets.*, locations.name as location_name 
@@ -445,6 +496,9 @@ app.post('/api/transactions', async (req, res) => {
       INSERT INTO transactions (asset_id, type, quantity_change, location_id, user_name, notes)
       VALUES (?, ?, ?, ?, ?, ?)
     `, [asset_id, type, finalChange, destLocation, user_name, notes || '']);
+
+    // Sync global status before returning
+    await syncGlobalStatus(asset.sku, asset.name);
 
     const updatedAsset = await dbGet(`
       SELECT assets.*, locations.name as location_name 

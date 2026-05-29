@@ -1085,6 +1085,18 @@ function App() {
             updatedAssetsList = assets.map(a => a.id === targetAssetId ? updatedAsset : a);
           }
 
+          // Recalculate status globally for all items in the matching group in local state
+          const targetKey = (asset.sku && asset.sku.trim() !== '') ? `sku:${asset.sku.trim().toLowerCase()}` : `name:${asset.name.trim().toLowerCase()}`;
+          const globalStatus = getGlobalStatus(asset.name, asset.sku, updatedAssetsList);
+          
+          updatedAssetsList = updatedAssetsList.map(a => {
+            const aKey = (a.sku && a.sku.trim() !== '') ? `sku:${a.sku.trim().toLowerCase()}` : `name:${a.name.trim().toLowerCase()}`;
+            if (aKey === targetKey) {
+              return { ...a, status: globalStatus };
+            }
+            return a;
+          });
+
           setAssets(updatedAssetsList);
           localStorage.setItem('cached_assets', JSON.stringify(updatedAssetsList));
           
@@ -1190,7 +1202,20 @@ function App() {
           status: newStatus
         };
         
-        const updatedAssetsList = assets.map(a => a.id === asset.id ? updatedAsset : a);
+        let updatedAssetsList = assets.map(a => a.id === asset.id ? updatedAsset : a);
+        
+        // Recalculate status globally for all items in the matching group in local state
+        const targetKey = (asset.sku && asset.sku.trim() !== '') ? `sku:${asset.sku.trim().toLowerCase()}` : `name:${asset.name.trim().toLowerCase()}`;
+        const globalStatus = getGlobalStatus(asset.name, asset.sku, updatedAssetsList);
+        
+        updatedAssetsList = updatedAssetsList.map(a => {
+          const aKey = (a.sku && a.sku.trim() !== '') ? `sku:${a.sku.trim().toLowerCase()}` : `name:${a.name.trim().toLowerCase()}`;
+          if (aKey === targetKey) {
+            return { ...a, status: globalStatus };
+          }
+          return a;
+        });
+
         setAssets(updatedAssetsList);
         localStorage.setItem('cached_assets', JSON.stringify(updatedAssetsList));
         
@@ -1219,6 +1244,20 @@ function App() {
     if (qty <= 0) return 'Out of Stock';
     if (minQty && qty <= minQty) return 'Low Stock';
     return 'Available';
+  };
+
+  // Helper to get status globally for a SKU/Name group in the frontend state
+  const getGlobalStatus = (assetName, assetSku, localAssets = assets) => {
+    const key = (assetSku && assetSku.trim() !== '') ? `sku:${assetSku.trim().toLowerCase()}` : `name:${assetName.trim().toLowerCase()}`;
+    const matches = localAssets.filter(a => {
+      const matchKey = (a.sku && a.sku.trim() !== '') ? `sku:${a.sku.trim().toLowerCase()}` : `name:${a.name.trim().toLowerCase()}`;
+      return matchKey === key;
+    });
+    
+    const totalQty = matches.reduce((sum, item) => sum + item.quantity, 0);
+    const maxMinQty = matches.reduce((max, item) => Math.max(max, item.min_quantity || 0), 0);
+    
+    return calculateStatus(totalQty, maxMinQty);
   };
 
   // Export label details as high quality image
@@ -1890,6 +1929,16 @@ function App() {
       </div>
     );
   }
+
+  const otherLocations = activeAsset 
+    ? assets.filter(a => 
+        a.id !== activeAsset.id && 
+        (activeAsset.sku && activeAsset.sku.trim() !== '' 
+          ? a.sku?.toLowerCase() === activeAsset.sku.toLowerCase() 
+          : a.name.toLowerCase() === activeAsset.name.toLowerCase()
+        )
+      )
+    : [];
 
   return (
     <div className="app-container">
@@ -3762,6 +3811,44 @@ function App() {
                 <p style={{ fontSize: '1.05rem', fontWeight: '600' }}>{activeAsset.location_name || 'Unassigned'}</p>
               </div>
             </div>
+
+            {/* Other locations where same item/SKU is stored */}
+            {otherLocations.length > 0 && (
+              <div className="panel" style={{ padding: '14px', marginTop: '-12px', marginBottom: '24px' }}>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>
+                  Also Stored At:
+                </span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {otherLocations.map(other => (
+                    <div 
+                      key={other.id} 
+                      style={{ 
+                        display: 'flex', 
+                        justifyContent: 'space-between', 
+                        alignItems: 'center', 
+                        fontSize: '0.85rem', 
+                        background: 'rgba(255, 255, 255, 0.04)', 
+                        padding: '8px 12px', 
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        border: '1px solid rgba(255, 255, 255, 0.05)',
+                        transition: 'background 0.2s'
+                      }}
+                      onClick={() => setActiveAsset(other)}
+                      title="Click to view details for this location"
+                      className="hover-lighten"
+                    >
+                      <span style={{ fontWeight: '500', color: '#e2e8f0' }}>
+                        {other.location_name || 'Unassigned'}
+                      </span>
+                      <span className="badge badge-secondary" style={{ fontSize: '0.75rem', padding: '2px 6px' }}>
+                        {other.quantity} {other.unit}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Quick stock operations inside drawer */}
             <div className="panel" style={{ padding: '16px', marginBottom: '24px' }}>
