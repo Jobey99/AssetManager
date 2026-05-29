@@ -4,28 +4,11 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: asset-manager
-    expose:
-      - "5000"
+    ports:
+      - "5000:5000"
     volumes:
       - asset-data:/app/data
     restart: unless-stopped
 
-  caddy:
-    image: caddy:2-alpine
-    container_name: caddy-ssl-proxy
-    restart: unless-stopped
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - caddy_data:/data
-      - caddy_config:/config
-    command: caddy reverse-proxy --from assets.josh-green.uk --to asset-manager:5000
-
 volumes:
   asset-data:
-  caddy_data:
-  caddy_config:
