@@ -239,7 +239,7 @@ async function initDatabase() {
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [asset.id, asset.name, asset.description, asset.sku, asset.quantity, asset.unit, asset.location_id, asset.status, asset.min_quantity]
         );
-        
+
         // Log an initial transaction
         await dbRun(
           `INSERT INTO transactions (asset_id, type, quantity_change, location_id, user_name, notes) 
@@ -279,6 +279,21 @@ async function initDatabase() {
       console.log('Completed distinct category migration from assets table.');
     } catch (e) {
       console.warn('Category migration warning:', e);
+    }
+
+    // 7. Migrate assets table to include serial_number and warranty_expiry columns
+    try {
+      await dbRun("ALTER TABLE assets ADD COLUMN serial_number TEXT");
+      console.log("Added serial_number column to assets table.");
+    } catch (e) {
+      // Column might already exist
+    }
+
+    try {
+      await dbRun("ALTER TABLE assets ADD COLUMN warranty_expiry TEXT");
+      console.log("Added warranty_expiry column to assets table.");
+    } catch (e) {
+      // Column might already exist
     }
 
   } catch (error) {

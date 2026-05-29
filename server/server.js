@@ -5,6 +5,35 @@ const crypto = require('crypto');
 const fs = require('fs');
 const { initDatabase, dbRun, dbGet, dbAll, hashPassword, restoreDatabaseFile } = require('./database');
 
+const backupsDir = path.join(__dirname, 'backups');
+if (!fs.existsSync(backupsDir)) {
+  fs.mkdirSync(backupsDir, { recursive: true });
+}
+
+function runDailyBackup() {
+  try {
+    const dbPath = process.env.DATABASE_PATH || path.join(__dirname, 'inventory.db');
+    if (!fs.existsSync(dbPath)) return;
+
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const currentDay = days[new Date().getDay()];
+    const backupPath = path.join(backupsDir, `inventory-${currentDay}.db`);
+    
+    fs.copyFileSync(dbPath, backupPath);
+    console.log(`[Backup System] Created rolling daily backup: inventory-${currentDay}.db`);
+  } catch (error) {
+    console.error("[Backup System] Failed to copy database backup:", error);
+  }
+}
+
+// Run initial backup check at boot
+runDailyBackup();
+
+// Run backup check every hour
+setInterval(() => {
+  runDailyBackup();
+}, 3600000);
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
@@ -26,17 +55,17 @@ app.use((req, res, next) => {
     '/download-apk',
     '/app.apk'
   ];
-  
+
   const isPublic = publicPaths.includes(req.path) || !req.path.startsWith('/api');
   if (isPublic) {
     return next();
   }
-  
+
   const token = req.headers['authorization'];
   if (!token || !activeSessions.has(token)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  
+
   req.user = activeSessions.get(token);
   next();
 });
@@ -134,7 +163,7 @@ app.get('/api/assets/:id', async (req, res) => {
 app.post('/api/assets', async (req, res) => {
   try {
     let { id, name, description, sku, quantity, unit, location_id, min_quantity, category } = req.body;
-    
+
     if (!name) {
       return res.status(400).json({ error: 'Asset name is required' });
     }
@@ -272,10 +301,10 @@ app.post('/api/locations', async (req, res) => {
 app.delete('/api/locations/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     // Explicitly null out location references in assets
     await dbRun('UPDATE assets SET location_id = NULL WHERE location_id = ?', [id]);
-    
+
     const result = await dbRun('DELETE FROM locations WHERE id = ?', [id]);
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Location not found' });
@@ -398,9 +427,9 @@ app.post('/api/transactions', async (req, res) => {
 
     const changeVal = parseInt(quantity_change, 10) || 0;
     const destLocationId = (location_id && location_id !== 'null' && location_id !== '') ? parseInt(location_id, 10) : null;
-    const isTransfer = (type === 'CHECK_OUT' || type === 'SALE') && 
-                       destLocationId && 
-                       destLocationId !== asset.location_id;
+    const isTransfer = (type === 'CHECK_OUT' || type === 'SALE') &&
+      destLocationId &&
+      destLocationId !== asset.location_id;
 
     if (isTransfer) {
       // 1. Subtract changeVal from source asset
@@ -550,7 +579,7 @@ app.post('/api/users', async (req, res) => {
     const { salt, hash } = hashPassword(defaultPassword);
 
     const result = await dbRun(
-      'INSERT INTO users (name, role, password_hash, salt) VALUES (?, ?, ?, ?)', 
+      'INSERT INTO users (name, role, password_hash, salt) VALUES (?, ?, ?, ?)',
       [name, role, hash, salt]
     );
     const newUser = await dbGet('SELECT id, name, role, created_at FROM users WHERE id = ?', [result.id]);
@@ -578,7 +607,7 @@ app.put('/api/users/:id', async (req, res) => {
     if (password) {
       const { salt, hash } = hashPassword(password);
       await dbRun(
-        'UPDATE users SET name = ?, role = ?, password_hash = ?, salt = ? WHERE id = ?', 
+        'UPDATE users SET name = ?, role = ?, password_hash = ?, salt = ? WHERE id = ?',
         [name, role, hash, salt, id]
       );
     } else {
@@ -649,7 +678,7 @@ app.post('/api/admin/seed-activity', async (req, res) => {
       const randUser = users[Math.floor(Math.random() * users.length)];
       const randLocation = locations.length > 0 ? locations[Math.floor(Math.random() * locations.length)].id : null;
       const type = types[Math.floor(Math.random() * types.length)];
-      
+
       let change = 0;
       if (type === 'CHECK_IN') {
         change = Math.floor(Math.random() * 15) + 1;
@@ -661,7 +690,7 @@ app.post('/api/admin/seed-activity', async (req, res) => {
 
       const notes = notesOptions[Math.floor(Math.random() * notesOptions.length)];
       const hoursAgo = 12 - i;
-      
+
       await dbRun(`
         INSERT INTO transactions (asset_id, type, quantity_change, location_id, user_name, notes, created_at)
         VALUES (?, ?, ?, ?, ?, ?, datetime('now', '-${hoursAgo} hours'))
@@ -671,7 +700,7 @@ app.post('/api/admin/seed-activity', async (req, res) => {
       const currentQty = randAsset.quantity || 0;
       const newQty = Math.max(0, currentQty + change);
       const status = calculateStatus(newQty, randAsset.min_quantity || 0);
-      
+
       await dbRun('UPDATE assets SET quantity = ?, status = ? WHERE id = ?', [newQty, status, randAsset.id]);
     }
 
@@ -811,6 +840,94 @@ app.post('/api/admin/restore', express.raw({ type: '*/*', limit: '50mb' }), asyn
   }
 });
 
+// GET /api/admin/backups-list - List 7 daily backups
+app.get('/api/admin/backups-list', (req, res) => {
+  if (req.user?.role !== 'Admin') {
+    return res.status(403).json({ error: 'Forbidden: Admin access required' });
+  }
+
+  try {
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const list = days.map(day => {
+      const filename = `inventory-${day}.db`;
+      const filePath = path.join(backupsDir, filename);
+      const exists = fs.existsSync(filePath);
+      
+      let size = null;
+      let timestamp = null;
+      if (exists) {
+        const stats = fs.statSync(filePath);
+        size = stats.size;
+        timestamp = stats.mtime;
+      }
+      
+      return {
+        day,
+        filename,
+        exists,
+        size: size ? `${Math.round(size / 1024)} KB` : '0 KB',
+        timestamp
+      };
+    });
+
+    res.json(list);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/admin/restore-local-backup - Restore a specific daily slot
+app.post('/api/admin/restore-local-backup', async (req, res) => {
+  if (req.user?.role !== 'Admin') {
+    return res.status(403).json({ error: 'Forbidden: Admin access required' });
+  }
+
+  try {
+    const { filename } = req.body;
+    if (!filename) {
+      return res.status(400).json({ error: 'Filename is required' });
+    }
+
+    const safeFilename = path.basename(filename);
+    const backupPath = path.join(backupsDir, safeFilename);
+
+    if (!fs.existsSync(backupPath)) {
+      return res.status(404).json({ error: `Backup file '${safeFilename}' not found.` });
+    }
+
+    const rawBuffer = fs.readFileSync(backupPath);
+    await restoreDatabaseFile(rawBuffer);
+
+    res.json({ message: 'Database successfully rolled back to local backup!' });
+  } catch (error) {
+    console.error("Local database restore error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/admin/download-backup/:filename - Download single rolling file
+app.get('/api/admin/download-backup/:filename', (req, res) => {
+  if (req.user?.role !== 'Admin') {
+    return res.status(403).json({ error: 'Forbidden: Admin access required' });
+  }
+
+  const safeFilename = path.basename(req.params.filename);
+  const backupPath = path.join(backupsDir, safeFilename);
+
+  if (!fs.existsSync(backupPath)) {
+    return res.status(404).json({ error: 'Backup file not found' });
+  }
+
+  res.download(backupPath, safeFilename, (err) => {
+    if (err) {
+      console.error("Backup download error:", err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to download backup file' });
+      }
+    }
+  });
+});
+
 // ----------------------------------------------------
 // MOBILE APK FILE HOSTING
 // ----------------------------------------------------
@@ -828,7 +945,7 @@ app.post('/api/admin/upload-apk', express.raw({ type: '*/*', limit: '100mb' }), 
     }
 
     const apkPath = path.join(__dirname, 'public', 'app.apk');
-    
+
     // Ensure public folder exists
     const publicFolder = path.dirname(apkPath);
     if (!fs.existsSync(publicFolder)) {

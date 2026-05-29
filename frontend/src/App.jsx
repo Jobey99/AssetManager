@@ -23,7 +23,8 @@ import {
   Settings,
   Edit,
   User,
-  Folder
+  Folder,
+  RotateCcw
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import QRCode from 'qrcode';
@@ -217,10 +218,11 @@ function App() {
   const [isSyncing, setIsSyncing] = useState(false);
 
   // Form inputs
-  const [newAsset, setNewAsset] = useState({ id: '', name: '', description: '', sku: '', quantity: 0, unit: 'pcs', location_id: '', min_quantity: 0, category: 'Uncategorized' });
+  const [newAsset, setNewAsset] = useState({ id: '', name: '', description: '', sku: '', quantity: 0, unit: 'pcs', location_id: '', min_quantity: 0, category: 'Uncategorized', serial_number: '', warranty_expiry: '' });
   const [newLocation, setNewLocation] = useState({ name: '', description: '' });
   const [newCategory, setNewCategory] = useState({ name: '', description: '' });
   const [newUser, setNewUser] = useState({ name: '', role: 'Engineer', password: '' });
+  const [backups, setBackups] = useState([]);
 
   // Custom fetch wrapper injecting authentication headers
   const authFetch = async (url, options = {}) => {
@@ -484,6 +486,13 @@ function App() {
     return () => clearInterval(interval);
   }, [connectionOk]);
 
+  // Fetch backups list periodically if Admin is logged in
+  useEffect(() => {
+    if (currentUser?.role === 'Admin') {
+      fetchBackups();
+    }
+  }, [currentUser, currentView]);
+
   // Fetch functions
   const fetchAssets = async () => {
     try {
@@ -527,6 +536,18 @@ function App() {
       console.warn("Using cached categories:", e);
       const cached = localStorage.getItem('cached_categories');
       if (cached) setCategories(JSON.parse(cached));
+    }
+  };
+
+  const fetchBackups = async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/admin/backups-list`);
+      if (res.ok) {
+        const data = await res.json();
+        setBackups(data);
+      }
+    } catch (e) {
+      console.error("Failed to load rolling backups list:", e);
     }
   };
 
@@ -1414,7 +1435,7 @@ function App() {
       if (res.ok) {
         setAssets([data, ...assets]);
         setShowAddAsset(false);
-        setNewAsset({ id: '', name: '', description: '', sku: '', quantity: 0, unit: 'pcs', location_id: '', min_quantity: 0 });
+        setNewAsset({ id: '', name: '', description: '', sku: '', quantity: 0, unit: 'pcs', location_id: '', min_quantity: 0, category: 'Uncategorized', serial_number: '', warranty_expiry: '' });
         alert(`Asset '${data.name}' created successfully!`);
         fetchTransactions();
       } else {
@@ -1803,6 +1824,54 @@ function App() {
     }
   };
 
+  const handleLocalRestoreBackup = async (filename, day) => {
+    if (!window.confirm(`⚠️ WARNING: Restoring the backup from ${day} will overwrite your current database. All active changes since that backup was made will be lost!\n\nAre you sure you want to proceed?`)) {
+      return;
+    }
+
+    try {
+      const res = await authFetch(`${API_BASE}/admin/restore-local-backup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.message || 'Database successfully rolled back!');
+        window.location.reload();
+      } else {
+        alert(data.error || 'Failed to restore backup.');
+      }
+    } catch (error) {
+      console.error(error);
+      alert('Error restoring local backup.');
+    }
+  };
+
+  const handleDownloadLocalBackup = async (filename) => {
+    try {
+      const token = localStorage.getItem('auth_token') || '';
+      const res = await fetch(`${API_BASE}/admin/download-backup/${filename}`, {
+        headers: {
+          'Authorization': token
+        }
+      });
+      if (!res.ok) throw new Error('Failed to download backup file');
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error(error);
+      alert('Error downloading backup file.');
+    }
+  };
+
   // Print Queue Helpers
   const togglePrintQueue = (asset) => {
     const exists = printQueue.some(item => item.id === asset.id);
@@ -2146,6 +2215,49 @@ function App() {
       .sort((a, b) => b.totalMoved - a.totalMoved)
       .slice(0, 5);
   }, [transactions, assets]);
+
+  const chartData = React.useMemo(() => {
+    const days = [];
+    const checkIns = [];
+    const checkOuts = [];
+    
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      days.push(d);
+      checkIns.push(0);
+      checkOuts.push(0);
+    }
+    
+    transactions.forEach(tx => {
+      const dateStr = tx.created_at || tx.timestamp;
+      if (!dateStr) return;
+      const txDate = new Date(dateStr);
+      
+      const dayIdx = days.findIndex(d => 
+        d.getFullYear() === txDate.getFullYear() &&
+        d.getMonth() === txDate.getMonth() &&
+        d.getDate() === txDate.getDate()
+      );
+      
+      if (dayIdx !== -1) {
+        const qty = Math.abs(tx.quantity_change || 0);
+        if (tx.quantity_change > 0) {
+          checkIns[dayIdx] += qty;
+        } else if (tx.quantity_change < 0) {
+          checkOuts[dayIdx] += qty;
+        }
+      }
+    });
+
+    const dayLabels = days.map(d => d.toLocaleDateString('en-US', { weekday: 'short' }));
+    
+    return {
+      labels: dayLabels,
+      checkIns,
+      checkOuts
+    };
+  }, [transactions]);
 
   if (!isAuthenticated) {
     return (
@@ -2502,6 +2614,213 @@ function App() {
             </div>
 
             <div className="dashboard-layout">
+              {/* SVG Analytics Chart Card (Spans full width of grid) */}
+              <div className="panel" style={{ gridColumn: '1 / -1', padding: '20px' }}>
+                <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                  <h3 className="panel-title" style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
+                    <History size={18} style={{ color: 'var(--accent-indigo)' }} /> Weekly Inventory Volume Velocity
+                  </h3>
+                  <div style={{ display: 'flex', gap: '16px', fontSize: '0.8rem' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-secondary)' }}>
+                      <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: 'var(--accent-teal)' }}></span>
+                      Check-in
+                    </span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-secondary)' }}>
+                      <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: 'var(--accent-rose)' }}></span>
+                      Withdrawal
+                    </span>
+                  </div>
+                </div>
+
+                {/* SVG Render Container */}
+                {(() => {
+                  const svgWidth = 700;
+                  const svgHeight = 160;
+                  const paddingX = 40;
+                  const paddingY = 20;
+                  const chartW = svgWidth - paddingX * 2;
+                  const chartH = svgHeight - paddingY * 2;
+
+                  const maxVal = Math.max(...chartData.checkIns, ...chartData.checkOuts, 5);
+
+                  const checkInPoints = chartData.checkIns.map((val, idx) => {
+                    const x = paddingX + (idx * (chartW / 6));
+                    const y = paddingY + chartH - ((val / maxVal) * chartH);
+                    return { x, y, val };
+                  });
+
+                  const checkOutPoints = chartData.checkOuts.map((val, idx) => {
+                    const x = paddingX + (idx * (chartW / 6));
+                    const y = paddingY + chartH - ((val / maxVal) * chartH);
+                    return { x, y, val };
+                  });
+
+                  const pointsToPath = (points) => {
+                    if (points.length === 0) return '';
+                    return points.reduce((acc, p, idx) => {
+                      return idx === 0 ? `M ${p.x} ${p.y}` : `${acc} L ${p.x} ${p.y}`;
+                    }, '');
+                  };
+
+                  const pointsToAreaPath = (points) => {
+                    if (points.length === 0) return '';
+                    const start = points[0];
+                    const end = points[points.length - 1];
+                    const baselineY = paddingY + chartH;
+                    let path = `M ${start.x} ${baselineY}`;
+                    points.forEach(p => {
+                      path += ` L ${p.x} ${p.y}`;
+                    });
+                    path += ` L ${end.x} ${baselineY} Z`;
+                    return path;
+                  };
+
+                  return (
+                    <div style={{ width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                      <svg 
+                        viewBox={`0 0 ${svgWidth} ${svgHeight}`} 
+                        width="100%" 
+                        height="100%" 
+                        style={{ display: 'block', minWidth: '600px' }}
+                      >
+                        <defs>
+                          <linearGradient id="checkInGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="var(--accent-teal)" stopOpacity="0.25" />
+                            <stop offset="100%" stopColor="var(--accent-teal)" stopOpacity="0.0" />
+                          </linearGradient>
+                          <linearGradient id="checkOutGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="var(--accent-rose)" stopOpacity="0.2" />
+                            <stop offset="100%" stopColor="var(--accent-rose)" stopOpacity="0.0" />
+                          </linearGradient>
+                          <filter id="glowTeal" x="-20%" y="-20%" width="140%" height="140%">
+                            <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="var(--accent-teal)" floodOpacity="0.4" />
+                          </filter>
+                          <filter id="glowRose" x="-20%" y="-20%" width="140%" height="140%">
+                            <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="var(--accent-rose)" floodOpacity="0.4" />
+                          </filter>
+                        </defs>
+
+                        {/* Grid lines */}
+                        {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
+                          const y = paddingY + chartH - (ratio * chartH);
+                          const gridVal = Math.round(ratio * maxVal);
+                          return (
+                            <g key={i} opacity="0.15">
+                              <line 
+                                x1={paddingX} 
+                                y1={y} 
+                                x2={svgWidth - paddingX} 
+                                y2={y} 
+                                stroke="white" 
+                                strokeDasharray="3 3" 
+                              />
+                              <text 
+                                x={paddingX - 10} 
+                                y={y + 4} 
+                                fill="white" 
+                                fontSize="9" 
+                                textAnchor="end"
+                              >
+                                {gridVal}
+                              </text>
+                            </g>
+                          );
+                        })}
+
+                        {/* Fills */}
+                        <path d={pointsToAreaPath(checkInPoints)} fill="url(#checkInGrad)" />
+                        <path d={pointsToAreaPath(checkOutPoints)} fill="url(#checkOutGrad)" />
+
+                        {/* Lines */}
+                        <path 
+                          d={pointsToPath(checkInPoints)} 
+                          fill="none" 
+                          stroke="var(--accent-teal)" 
+                          strokeWidth="2.5" 
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          filter="url(#glowTeal)" 
+                        />
+                        <path 
+                          d={pointsToPath(checkOutPoints)} 
+                          fill="none" 
+                          stroke="var(--accent-rose)" 
+                          strokeWidth="2.5" 
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          filter="url(#glowRose)" 
+                        />
+
+                        {/* Circles on Nodes */}
+                        {checkInPoints.map((p, idx) => (
+                          <g key={`in-${idx}`}>
+                            <circle 
+                              cx={p.x} 
+                              cy={p.y} 
+                              r="4.5" 
+                              fill="var(--bg-panel)" 
+                              stroke="var(--accent-teal)" 
+                              strokeWidth="2.5" 
+                            />
+                            <text 
+                              x={p.x} 
+                              y={p.y - 8} 
+                              fill="var(--accent-teal)" 
+                              fontSize="9" 
+                              fontWeight="bold" 
+                              textAnchor="middle"
+                            >
+                              {p.val > 0 ? p.val : ''}
+                            </text>
+                          </g>
+                        ))}
+                        {checkOutPoints.map((p, idx) => (
+                          <g key={`out-${idx}`}>
+                            <circle 
+                              cx={p.x} 
+                              cy={p.y} 
+                              r="4.5" 
+                              fill="var(--bg-panel)" 
+                              stroke="var(--accent-rose)" 
+                              strokeWidth="2.5" 
+                            />
+                            <text 
+                              x={p.x} 
+                              y={p.y + 14} 
+                              fill="var(--accent-rose)" 
+                              fontSize="9" 
+                              fontWeight="bold" 
+                              textAnchor="middle"
+                            >
+                              {p.val > 0 ? p.val : ''}
+                            </text>
+                          </g>
+                        ))}
+
+                        {/* X-axis labels */}
+                        {chartData.labels.map((lbl, idx) => {
+                          const x = paddingX + (idx * (chartW / 6));
+                          const y = paddingY + chartH + 18;
+                          return (
+                            <text 
+                              key={idx} 
+                              x={x} 
+                              y={y} 
+                              fill="var(--text-secondary)" 
+                              fontSize="10" 
+                              fontWeight="600" 
+                              textAnchor="middle"
+                            >
+                              {lbl}
+                            </text>
+                          );
+                        })}
+                      </svg>
+                    </div>
+                  );
+                })()}
+              </div>
+
               {/* Left Column: Alerts & Status */}
               <div className="panel">
                 <div className="panel-header">
@@ -3306,6 +3625,46 @@ function App() {
                       </div>
                     </div>
 
+                    <details style={{ 
+                      marginTop: '16px', 
+                      background: 'rgba(255, 255, 255, 0.02)', 
+                      border: '1px solid rgba(255, 255, 255, 0.05)', 
+                      borderRadius: '8px', 
+                      padding: '10px 12px' 
+                    }}>
+                      <summary style={{ 
+                        color: 'var(--accent-indigo)', 
+                        fontWeight: '600', 
+                        fontSize: '0.85rem', 
+                        cursor: 'pointer', 
+                        userSelect: 'none', 
+                        outline: 'none' 
+                      }}>
+                        Extended Details (Serial, Warranty)
+                      </summary>
+                      <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        <div className="form-group" style={{ marginBottom: 0 }}>
+                          <label className="form-label">Serial Number</label>
+                          <input 
+                            type="text" 
+                            className="form-control" 
+                            placeholder="e.g. SN-98234-A"
+                            value={newAsset.serial_number || ''}
+                            onChange={(e) => setNewAsset({ ...newAsset, serial_number: e.target.value })}
+                          />
+                        </div>
+                        <div className="form-group" style={{ marginBottom: 0 }}>
+                          <label className="form-label">Warranty Expiration Date</label>
+                          <input 
+                            type="date" 
+                            className="form-control" 
+                            value={newAsset.warranty_expiry || ''}
+                            onChange={(e) => setNewAsset({ ...newAsset, warranty_expiry: e.target.value })}
+                          />
+                        </div>
+                      </div>
+                    </details>
+
                     <div className="form-group">
                       <label className="form-label">Description / Remarks</label>
                       <textarea 
@@ -3428,6 +3787,46 @@ function App() {
                         ))}
                       </select>
                     </div>
+
+                    <details style={{ 
+                      marginTop: '16px', 
+                      background: 'rgba(255, 255, 255, 0.02)', 
+                      border: '1px solid rgba(255, 255, 255, 0.05)', 
+                      borderRadius: '8px', 
+                      padding: '10px 12px' 
+                    }}>
+                      <summary style={{ 
+                        color: 'var(--accent-indigo)', 
+                        fontWeight: '600', 
+                        fontSize: '0.85rem', 
+                        cursor: 'pointer', 
+                        userSelect: 'none', 
+                        outline: 'none' 
+                      }}>
+                        Extended Details (Serial, Warranty)
+                      </summary>
+                      <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        <div className="form-group" style={{ marginBottom: 0 }}>
+                          <label className="form-label">Serial Number</label>
+                          <input 
+                            type="text" 
+                            className="form-control" 
+                            placeholder="e.g. SN-98234-A"
+                            value={editingAsset.serial_number || ''}
+                            onChange={(e) => setEditingAsset({ ...editingAsset, serial_number: e.target.value })}
+                          />
+                        </div>
+                        <div className="form-group" style={{ marginBottom: 0 }}>
+                          <label className="form-label">Warranty Expiration Date</label>
+                          <input 
+                            type="date" 
+                            className="form-control" 
+                            value={editingAsset.warranty_expiry || ''}
+                            onChange={(e) => setEditingAsset({ ...editingAsset, warranty_expiry: e.target.value })}
+                          />
+                        </div>
+                      </div>
+                    </details>
 
                     <div className="form-group">
                       <label className="form-label">Description / Remarks</label>
@@ -4316,6 +4715,75 @@ function App() {
                     </div>
                   </div>
 
+                  {/* Rolling 7-Day Backups */}
+                  <div className="panel">
+                    <div className="panel-header">
+                      <h3 className="panel-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <History size={18} style={{ color: 'var(--accent-indigo)' }} /> Rolling 7-Day Backups
+                      </h3>
+                    </div>
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '16px' }}>
+                      Database states are automatically backed up daily in a rolling 7-day loop.
+                    </p>
+                    
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      {backups.map(b => (
+                        <div 
+                          key={b.day} 
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            padding: '10px 12px',
+                            background: 'rgba(255, 255, 255, 0.02)',
+                            border: '1px solid rgba(255, 255, 255, 0.05)',
+                            borderRadius: '8px'
+                          }}
+                        >
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <strong style={{ color: 'white', fontSize: '0.85rem' }}>{b.day}</strong>
+                              {b.exists ? (
+                                <span className="badge badge-success" style={{ fontSize: '0.65rem', padding: '1px 5px' }}>
+                                  Active ({b.size})
+                                </span>
+                              ) : (
+                                <span className="badge" style={{ fontSize: '0.65rem', padding: '1px 5px', backgroundColor: 'var(--bg-app)', color: 'var(--text-secondary)' }}>
+                                  Empty
+                                </span>
+                              )}
+                            </div>
+                            {b.exists && b.timestamp && (
+                              <p style={{ margin: '4px 0 0 0', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                Saved: {new Date(b.timestamp).toLocaleString()}
+                              </p>
+                            )}
+                          </div>
+                          {b.exists && (
+                            <div style={{ display: 'flex', gap: '6px' }}>
+                              <button 
+                                className="btn btn-secondary btn-sm"
+                                style={{ padding: '4px 8px', fontSize: '0.75rem', borderColor: 'var(--accent-indigo)', color: 'var(--accent-indigo)', background: 'transparent' }}
+                                onClick={() => handleDownloadLocalBackup(b.filename)}
+                                title="Download backup file"
+                              >
+                                <Download size={12} />
+                              </button>
+                              <button 
+                                className="btn btn-secondary btn-sm"
+                                style={{ padding: '4px 8px', fontSize: '0.75rem', borderColor: 'var(--accent-amber)', color: 'var(--accent-amber)', background: 'transparent' }}
+                                onClick={() => handleLocalRestoreBackup(b.filename, b.day)}
+                                title="Restore this state"
+                              >
+                                <RotateCcw size={12} /> Restore
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
                   {/* Hosted Mobile Application APK */}
                   <div className="panel">
                     <div className="panel-header">
@@ -4638,6 +5106,29 @@ function App() {
                 <p style={{ fontSize: '1.05rem', fontWeight: '600', fontFamily: 'monospace' }}>{activeAsset.sku || 'N/A'}</p>
               </div>
             </div>
+
+            {/* Extended attributes: Serial Number / Warranty (Only shown if at least one is present) */}
+            {(activeAsset.serial_number || activeAsset.warranty_expiry) && (
+              <div className="panel" style={{ padding: '14px', marginTop: '-12px', marginBottom: '24px' }}>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>
+                  Extended Information
+                </span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {activeAsset.serial_number && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+                      <span style={{ color: 'var(--text-secondary)' }}>Serial Number</span>
+                      <strong style={{ color: 'white', fontFamily: 'monospace' }}>{activeAsset.serial_number}</strong>
+                    </div>
+                  )}
+                  {activeAsset.warranty_expiry && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+                      <span style={{ color: 'var(--text-secondary)' }}>Warranty Expiration</span>
+                      <strong style={{ color: 'white' }}>{activeAsset.warranty_expiry}</strong>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Other locations where same item/SKU is stored */}
             {otherLocations.length > 0 && (
