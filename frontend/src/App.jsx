@@ -24,7 +24,8 @@ import {
   Edit,
   User,
   Folder,
-  RotateCcw
+  RotateCcw,
+  ExternalLink
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import QRCode from 'qrcode';
@@ -218,11 +219,14 @@ function App() {
   const [isSyncing, setIsSyncing] = useState(false);
 
   // Form inputs
-  const [newAsset, setNewAsset] = useState({ id: '', name: '', description: '', sku: '', quantity: 0, unit: 'pcs', location_id: '', min_quantity: 0, category: 'Uncategorized', serial_number: '', warranty_expiry: '' });
+  const [newAsset, setNewAsset] = useState({ id: '', name: '', description: '', sku: '', quantity: 0, unit: 'pcs', location_id: '', min_quantity: 0, category: 'Uncategorized', serial_number: '', warranty_expiry: '', purchase_price: 0.0, supplier_name: '', supplier_url: '' });
   const [newLocation, setNewLocation] = useState({ name: '', description: '' });
   const [newCategory, setNewCategory] = useState({ name: '', description: '' });
   const [newUser, setNewUser] = useState({ name: '', role: 'Engineer', password: '' });
   const [backups, setBackups] = useState([]);
+  const [adminDiagnostics, setAdminDiagnostics] = useState(null);
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
+  const [settingsTab, setSettingsTab] = useState('profile');
 
   // Custom fetch wrapper injecting authentication headers
   const authFetch = async (url, options = {}) => {
@@ -486,10 +490,11 @@ function App() {
     return () => clearInterval(interval);
   }, [connectionOk]);
 
-  // Fetch backups list periodically if Admin is logged in
+  // Fetch backups and diagnostics list periodically if Admin is logged in
   useEffect(() => {
     if (currentUser?.role === 'Admin') {
       fetchBackups();
+      fetchDiagnostics();
     }
   }, [currentUser, currentView]);
 
@@ -548,6 +553,22 @@ function App() {
       }
     } catch (e) {
       console.error("Failed to load rolling backups list:", e);
+    }
+  };
+
+  const fetchDiagnostics = async () => {
+    if (currentUser?.role !== 'Admin') return;
+    setDiagnosticsLoading(true);
+    try {
+      const res = await authFetch(`${API_BASE}/admin/diagnostics`);
+      if (res.ok) {
+        const data = await res.json();
+        setAdminDiagnostics(data);
+      }
+    } catch (e) {
+      console.error("Failed to load diagnostics:", e);
+    } finally {
+      setDiagnosticsLoading(false);
     }
   };
 
@@ -1422,6 +1443,26 @@ function App() {
     alert(`Copied ID: "${text}" to clipboard. You can paste this in PrintMaster!`);
   };
 
+  const handleExportCSV = async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/admin/export-csv`);
+      if (res.ok) {
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `zavi_inventory_audit_${Date.now()}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      } else {
+        alert("Failed to export logs. Admin access required.");
+      }
+    } catch (error) {
+      console.error("Export CSV error:", error);
+    }
+  };
+
   // Create Handlers
   const handleCreateAsset = async (e) => {
     e.preventDefault();
@@ -1435,7 +1476,7 @@ function App() {
       if (res.ok) {
         setAssets([data, ...assets]);
         setShowAddAsset(false);
-        setNewAsset({ id: '', name: '', description: '', sku: '', quantity: 0, unit: 'pcs', location_id: '', min_quantity: 0, category: 'Uncategorized', serial_number: '', warranty_expiry: '' });
+        setNewAsset({ id: '', name: '', description: '', sku: '', quantity: 0, unit: 'pcs', location_id: '', min_quantity: 0, category: 'Uncategorized', serial_number: '', warranty_expiry: '', purchase_price: 0.0, supplier_name: '', supplier_url: '' });
         alert(`Asset '${data.name}' created successfully!`);
         fetchTransactions();
       } else {
@@ -2611,11 +2652,23 @@ function App() {
                   <span className="stat-label">Garages & Sites</span>
                 </div>
               </div>
+              {currentUser?.role === 'Admin' && (
+                <div className="card-stat" style={{ '--stat-color': 'var(--accent-indigo)', '--stat-glow': 'rgba(99, 102, 241, 0.15)' }}>
+                  <div className="stat-icon"><ArrowLeftRight size={22} /></div>
+                  <div className="stat-info">
+                    <span className="stat-value">
+                      {new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP', maximumFractionDigits: 0 }).format(adminDiagnostics?.stats?.totalValuation || 0)}
+                    </span>
+                    <span className="stat-label">Total Portfolio Value</span>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="dashboard-layout">
               {/* SVG Analytics Chart Card (Spans full width of grid) */}
-              <div className="panel" style={{ gridColumn: '1 / -1', padding: '20px' }}>
+              {currentUser?.role === 'Admin' && (
+                <div className="panel" style={{ gridColumn: '1 / -1', padding: '20px' }}>
                 <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                   <h3 className="panel-title" style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
                     <History size={18} style={{ color: 'var(--accent-indigo)' }} /> Weekly Inventory Volume Velocity
@@ -2820,6 +2873,7 @@ function App() {
                   );
                 })()}
               </div>
+              )}
 
               {/* Left Column: Alerts & Status */}
               <div className="panel">
@@ -2840,6 +2894,7 @@ function App() {
                           <th>In Stock</th>
                           <th>Min stock</th>
                           <th>Status</th>
+                          <th>Action</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2854,12 +2909,27 @@ function App() {
                                 {a.status}
                               </span>
                             </td>
+                            <td>
+                              {a.supplier_url ? (
+                                <a 
+                                  href={a.supplier_url} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer" 
+                                  className="btn btn-secondary btn-sm"
+                                  style={{ padding: '2px 8px', fontSize: '0.75rem', gap: '4px', textDecoration: 'none', color: 'var(--accent-cyan)' }}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <ExternalLink size={12} /> Buy
+                                </a>
+                              ) : (
+                                <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>—</span>
+                              )}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
-                  </div>
-                )}
+                  </div>                )}
               </div>
 
               {/* Top Moving Parts Widget */}
@@ -2899,8 +2969,17 @@ function App() {
 
               {/* Right Column: Global Activity Log */}
               <div className="panel">
-                <div className="panel-header">
-                  <h3 className="panel-title"><History size={18} /> Recent Log</h3>
+                <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <h3 className="panel-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}><History size={18} /> Recent Log</h3>
+                  {currentUser?.role === 'Admin' && (
+                    <button 
+                      className="btn btn-secondary btn-sm"
+                      style={{ padding: '4px 10px', fontSize: '0.75rem', gap: '4px', display: 'flex', alignItems: 'center' }}
+                      onClick={handleExportCSV}
+                    >
+                      <Download size={12} /> Export CSV
+                    </button>
+                  )}
                 </div>
                 
                 <div className="transaction-feed">
@@ -3640,27 +3719,65 @@ function App() {
                         userSelect: 'none', 
                         outline: 'none' 
                       }}>
-                        Extended Details (Serial, Warranty)
+                        Extended Details (Serial, Warranty, Cost & Supplier)
                       </summary>
                       <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        <div className="form-row" style={{ gap: '12px', marginBottom: 0 }}>
+                          <div className="form-group" style={{ marginBottom: 0 }}>
+                            <label className="form-label">Serial Number</label>
+                            <input 
+                              type="text" 
+                              className="form-control" 
+                              placeholder="e.g. SN-98234-A"
+                              value={newAsset.serial_number || ''}
+                              onChange={(e) => setNewAsset({ ...newAsset, serial_number: e.target.value })}
+                            />
+                          </div>
+                          <div className="form-group" style={{ marginBottom: 0 }}>
+                            <label className="form-label">Warranty Expiry</label>
+                            <input 
+                              type="date" 
+                              className="form-control" 
+                              value={newAsset.warranty_expiry || ''}
+                              onChange={(e) => setNewAsset({ ...newAsset, warranty_expiry: e.target.value })}
+                            />
+                          </div>
+                        </div>
+
                         <div className="form-group" style={{ marginBottom: 0 }}>
-                          <label className="form-label">Serial Number</label>
+                          <label className="form-label">Unit Purchase Price</label>
                           <input 
-                            type="text" 
+                            type="number" 
+                            step="0.01" 
+                            min="0"
                             className="form-control" 
-                            placeholder="e.g. SN-98234-A"
-                            value={newAsset.serial_number || ''}
-                            onChange={(e) => setNewAsset({ ...newAsset, serial_number: e.target.value })}
+                            placeholder="e.g. 24.99"
+                            value={newAsset.purchase_price || ''}
+                            onChange={(e) => setNewAsset({ ...newAsset, purchase_price: parseFloat(e.target.value) || 0 })}
                           />
                         </div>
-                        <div className="form-group" style={{ marginBottom: 0 }}>
-                          <label className="form-label">Warranty Expiration Date</label>
-                          <input 
-                            type="date" 
-                            className="form-control" 
-                            value={newAsset.warranty_expiry || ''}
-                            onChange={(e) => setNewAsset({ ...newAsset, warranty_expiry: e.target.value })}
-                          />
+
+                        <div className="form-row" style={{ gap: '12px', marginBottom: 0 }}>
+                          <div className="form-group" style={{ marginBottom: 0 }}>
+                            <label className="form-label">Supplier Name</label>
+                            <input 
+                              type="text" 
+                              className="form-control" 
+                              placeholder="e.g. RS Components"
+                              value={newAsset.supplier_name || ''}
+                              onChange={(e) => setNewAsset({ ...newAsset, supplier_name: e.target.value })}
+                            />
+                          </div>
+                          <div className="form-group" style={{ marginBottom: 0 }}>
+                            <label className="form-label">Supplier Reorder URL</label>
+                            <input 
+                              type="url" 
+                              className="form-control" 
+                              placeholder="e.g. https://uk.rs-online.com/..."
+                              value={newAsset.supplier_url || ''}
+                              onChange={(e) => setNewAsset({ ...newAsset, supplier_url: e.target.value })}
+                            />
+                          </div>
                         </div>
                       </div>
                     </details>
@@ -3803,27 +3920,65 @@ function App() {
                         userSelect: 'none', 
                         outline: 'none' 
                       }}>
-                        Extended Details (Serial, Warranty)
+                        Extended Details (Serial, Warranty, Cost & Supplier)
                       </summary>
                       <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        <div className="form-row" style={{ gap: '12px', marginBottom: 0 }}>
+                          <div className="form-group" style={{ marginBottom: 0 }}>
+                            <label className="form-label">Serial Number</label>
+                            <input 
+                              type="text" 
+                              className="form-control" 
+                              placeholder="e.g. SN-98234-A"
+                              value={editingAsset.serial_number || ''}
+                              onChange={(e) => setEditingAsset({ ...editingAsset, serial_number: e.target.value })}
+                            />
+                          </div>
+                          <div className="form-group" style={{ marginBottom: 0 }}>
+                            <label className="form-label">Warranty Expiry</label>
+                            <input 
+                              type="date" 
+                              className="form-control" 
+                              value={editingAsset.warranty_expiry || ''}
+                              onChange={(e) => setEditingAsset({ ...editingAsset, warranty_expiry: e.target.value })}
+                            />
+                          </div>
+                        </div>
+
                         <div className="form-group" style={{ marginBottom: 0 }}>
-                          <label className="form-label">Serial Number</label>
+                          <label className="form-label">Unit Purchase Price</label>
                           <input 
-                            type="text" 
+                            type="number" 
+                            step="0.01" 
+                            min="0"
                             className="form-control" 
-                            placeholder="e.g. SN-98234-A"
-                            value={editingAsset.serial_number || ''}
-                            onChange={(e) => setEditingAsset({ ...editingAsset, serial_number: e.target.value })}
+                            placeholder="e.g. 24.99"
+                            value={editingAsset.purchase_price || ''}
+                            onChange={(e) => setEditingAsset({ ...editingAsset, purchase_price: parseFloat(e.target.value) || 0 })}
                           />
                         </div>
-                        <div className="form-group" style={{ marginBottom: 0 }}>
-                          <label className="form-label">Warranty Expiration Date</label>
-                          <input 
-                            type="date" 
-                            className="form-control" 
-                            value={editingAsset.warranty_expiry || ''}
-                            onChange={(e) => setEditingAsset({ ...editingAsset, warranty_expiry: e.target.value })}
-                          />
+
+                        <div className="form-row" style={{ gap: '12px', marginBottom: 0 }}>
+                          <div className="form-group" style={{ marginBottom: 0 }}>
+                            <label className="form-label">Supplier Name</label>
+                            <input 
+                              type="text" 
+                              className="form-control" 
+                              placeholder="e.g. RS Components"
+                              value={editingAsset.supplier_name || ''}
+                              onChange={(e) => setEditingAsset({ ...editingAsset, supplier_name: e.target.value })}
+                            />
+                          </div>
+                          <div className="form-group" style={{ marginBottom: 0 }}>
+                            <label className="form-label">Supplier Reorder URL</label>
+                            <input 
+                              type="url" 
+                              className="form-control" 
+                              placeholder="e.g. https://uk.rs-online.com/..."
+                              value={editingAsset.supplier_url || ''}
+                              onChange={(e) => setEditingAsset({ ...editingAsset, supplier_url: e.target.value })}
+                            />
+                          </div>
                         </div>
                       </div>
                     </details>
@@ -4414,29 +4569,71 @@ function App() {
             )}
           </div>
         )}
-
         {/* ----------------- VIEW: ACCOUNT & SYSTEM SETTINGS ----------------- */}
         {currentView === 'settings' && (
           <div>
             <div className="page-header">
               <div className="page-title-group">
-                <h1>{isAdmin ? 'System & Account Settings' : 'My Account Profile'}</h1>
-                <p>{isAdmin ? 'Manage your account credentials, direct overrides, database maintenance, and APK updates.' : 'View your profile and update your password.'}</p>
+                <h1>{isAdmin ? 'Admin Settings Console' : 'My Account Profile'}</h1>
+                <p>{isAdmin ? 'Detailed system diagnostics, database maintenance, rules management, and security overrides.' : 'View your engineering profile and update your credentials.'}</p>
               </div>
             </div>
 
-            <div className="dashboard-layout">
-              {/* Left Column: Account Profile & Overrides */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                
-                {/* Account Details Panel */}
+            {/* Premium Tabbed Navigation */}
+            <div className="admin-tabs" style={{ display: 'flex', gap: '8px', borderBottom: '1px solid var(--border-color)', marginBottom: '24px', overflowX: 'auto', paddingBottom: '8px' }}>
+              <button 
+                type="button"
+                className={`btn ${settingsTab === 'profile' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ padding: '8px 16px', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                onClick={() => setSettingsTab('profile')}
+              >
+                <User size={14} /> My Account
+              </button>
+              {isAdmin && (
+                <>
+                  <button 
+                    type="button"
+                    className={`btn ${settingsTab === 'diagnostics' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ padding: '8px 16px', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    onClick={() => setSettingsTab('diagnostics')}
+                  >
+                    <Info size={14} /> Status & Diagnostics
+                  </button>
+                  <button 
+                    type="button"
+                    className={`btn ${settingsTab === 'backups' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ padding: '8px 16px', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    onClick={() => setSettingsTab('backups')}
+                  >
+                    <Download size={14} /> Backups & Restore
+                  </button>
+                  <button 
+                    type="button"
+                    className={`btn ${settingsTab === 'system' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ padding: '8px 16px', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    onClick={() => setSettingsTab('system')}
+                  >
+                    <Settings size={14} /> Rules & Categories
+                  </button>
+                  <button 
+                    type="button"
+                    className={`btn ${settingsTab === 'controls' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ padding: '8px 16px', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    onClick={() => setSettingsTab('controls')}
+                  >
+                    <ShieldAlert size={14} /> Overrides & Controls
+                  </button>
+                </>
+              )}
+            </div>
+
+            {/* TAB CONTENT: PROFILE */}
+            {settingsTab === 'profile' && (
+              <div className="dashboard-layout" style={{ gridTemplateColumns: '1fr 1fr' }}>
                 <div className="panel">
                   <div className="panel-header">
-                    <h3 className="panel-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <User size={18} /> My Account
-                    </h3>
+                    <h3 className="panel-title"><User size={18} /> Credentials & Session</h3>
                   </div>
-                  
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                     <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                       <div className="avatar" style={{ width: '48px', height: '48px', fontSize: '1.25rem', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', backgroundColor: 'var(--accent-indigo)', color: 'white', fontWeight: 'bold' }}>
@@ -4478,450 +4675,596 @@ function App() {
                   </div>
                 </div>
 
-                {/* Admin-only Panel Overrides */}
-                {isAdmin && (
+                <div className="panel">
+                  <div className="panel-header">
+                    <h3 className="panel-title"><ArrowLeftRight size={18} /> Mobile App Connection</h3>
+                  </div>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label">Default Server IP / URL</label>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <input 
+                        type="text" 
+                        className="form-control" 
+                        value={serverInput}
+                        onChange={(e) => setServerInput(e.target.value)}
+                        placeholder="e.g. https://assets.josh-green.uk"
+                      />
+                      <button 
+                        className="btn btn-secondary" 
+                        type="button" 
+                        onClick={() => {
+                          let formattedUrl = serverInput.trim().replace(/\/$/, "");
+                          if (formattedUrl && !/^https?:\/\//i.test(formattedUrl)) {
+                            formattedUrl = "http://" + formattedUrl;
+                          }
+                          localStorage.setItem('server_api_url', formattedUrl);
+                          setServerUrl(formattedUrl);
+                          alert(`App server URL updated to: ${formattedUrl}\nReconnecting...`);
+                          window.location.reload();
+                        }}
+                      >
+                        Save & Apply
+                      </button>
+                    </div>
+                    <small style={{ color: 'var(--text-muted)', marginTop: '8px', display: 'block' }}>
+                      Configure the IP/domain that this client device connects to.
+                    </small>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB CONTENT: DIAGNOSTICS */}
+            {isAdmin && settingsTab === 'diagnostics' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                {/* Diagnostics Status Header */}
+                <div className="panel">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+                    <div>
+                      <h3 style={{ margin: 0, color: 'white', fontSize: '1.2rem' }}>Database Integrity & Statistics</h3>
+                      <p style={{ margin: '4px 0 0 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Verify relationships, anomalies, and structural health of the assets registry.</p>
+                    </div>
+                    <button 
+                      className="btn btn-primary" 
+                      onClick={fetchDiagnostics} 
+                      disabled={diagnosticsLoading}
+                      style={{ padding: '8px 20px', minWidth: '150px' }}
+                    >
+                      {diagnosticsLoading ? "Analyzing..." : "Run Diagnostics"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Diagnostics Grid stats */}
+                {adminDiagnostics && (
                   <>
-                    {/* Manual Stock Adjust Override */}
-                    <div className="panel">
-                      <div className="panel-header">
-                        <h3 className="panel-title"><ShieldAlert size={18} style={{ color: 'var(--accent-rose)' }} /> Direct Stock Override</h3>
+                    <div className="grid-stats" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+                      <div className="card-stat" style={{ '--stat-color': 'var(--primary)', '--stat-glow': 'var(--primary-glow)' }}>
+                        <span style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'white' }}>{adminDiagnostics.stats?.totalAssets}</span>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Total Unique Barcodes</span>
                       </div>
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '16px' }}>
-                        As an administrator, you can manually set the absolute stock count for any asset. This generates an audit log transaction.
-                      </p>
-                      
-                      <form onSubmit={handleManualStockOverride}>
-                        <div className="form-group">
-                          <label className="form-label">Select Material / Part</label>
-                          <select 
-                            className="form-control"
-                            value={manualOverrideAsset}
-                            onChange={(e) => {
-                              setManualOverrideAsset(e.target.value);
-                              const asset = assets.find(a => a.id === e.target.value);
-                              if (asset) setManualOverrideQty(asset.quantity);
-                            }}
-                            required
-                          >
-                            <option value="">-- Choose Asset --</option>
-                            {assets.map(a => (
-                              <option key={a.id} value={a.id}>{a.name} (Current: {a.quantity} {a.unit})</option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div className="form-row">
-                          <div className="form-group">
-                            <label className="form-label">Absolute Quantity Target</label>
-                            <input 
-                              type="number"
-                              min="0"
-                              className="form-control"
-                              value={manualOverrideQty}
-                              onChange={(e) => setManualOverrideQty(parseInt(e.target.value, 10) || 0)}
-                              required
-                            />
-                          </div>
-                          <div className="form-group">
-                            <label className="form-label">Audit Notes / Authority Reason</label>
-                            <input 
-                              type="text"
-                              className="form-control"
-                              placeholder="e.g. Physical inventory count correction"
-                              value={manualOverrideNotes}
-                              onChange={(e) => setManualOverrideNotes(e.target.value)}
-                              required
-                            />
-                          </div>
-                        </div>
-
-                        <button type="submit" className="btn btn-danger" style={{ width: '100%', marginTop: '8px' }}>
-                          Force Stock Overwrite
-                        </button>
-                      </form>
-                    </div>
-
-                    {/* System Settings & Custom Alerts */}
-                    <div className="panel">
-                      <div className="panel-header">
-                        <h3 className="panel-title"><Settings size={18} /> Global System Rules</h3>
+                      <div className="card-stat" style={{ '--stat-color': 'var(--accent-cyan)', '--stat-glow': 'rgba(6, 182, 212, 0.15)' }}>
+                        <span style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'white' }}>{adminDiagnostics.stats?.totalQuantity}</span>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Total Items Quantity</span>
                       </div>
-                      <div className="form-group">
-                        <label className="form-label">Default Alert Threshold Level (Global)</label>
-                        <div style={{ display: 'flex', gap: '8px' }}>
-                          <input 
-                            type="number" 
-                            className="form-control" 
-                            defaultValue="5" 
-                            style={{ maxWidth: '100px' }} 
-                          />
-                          <button className="btn btn-secondary" type="button" onClick={() => alert("Global default warning threshold configured to 5 units.")}>
-                            Apply Configuration
-                          </button>
-                        </div>
-                        <small style={{ color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
-                          Assets with quantities falling to or below this general value trigger a low stock alert (unless overridden in the specific asset model).
-                        </small>
+                      <div className="card-stat" style={{ '--stat-color': 'var(--accent-indigo)', '--stat-glow': 'rgba(99, 102, 241, 0.15)' }}>
+                        <span style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'var(--accent-cyan)' }}>
+                          {new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP', maximumFractionDigits: 0 }).format(adminDiagnostics.stats?.totalValuation || 0)}
+                        </span>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Total Portfolio Value</span>
+                      </div>
+                      <div className="card-stat" style={{ '--stat-color': 'var(--accent-amber)', '--stat-glow': 'rgba(245, 158, 11, 0.15)' }}>
+                        <span style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'white' }}>{adminDiagnostics.stats?.totalTransactions}</span>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Recorded Audit Logs</span>
                       </div>
                     </div>
 
-                    {/* Default Mobile App Server Connection URL */}
-                    <div className="panel" style={{ marginTop: '24px' }}>
-                      <div className="panel-header">
-                        <h3 className="panel-title"><ArrowLeftRight size={18} /> Mobile App Connection URL</h3>
-                      </div>
-                      <div className="form-group">
-                        <label className="form-label">Default Server IP / URL</label>
-                        <div style={{ display: 'flex', gap: '8px' }}>
-                          <input 
-                            type="text" 
-                            className="form-control" 
-                            value={serverInput}
-                            onChange={(e) => setServerInput(e.target.value)}
-                            placeholder="e.g. https://assets.josh-green.uk"
-                          />
-                          <button 
-                            className="btn btn-secondary" 
-                            type="button" 
-                            onClick={() => {
-                              let formattedUrl = serverInput.trim().replace(/\/$/, "");
-                              if (formattedUrl && !/^https?:\/\//i.test(formattedUrl)) {
-                                formattedUrl = "http://" + formattedUrl;
-                              }
-                              localStorage.setItem('server_api_url', formattedUrl);
-                              setServerUrl(formattedUrl);
-                              alert(`App server URL updated to: ${formattedUrl}\nReconnecting...`);
-                              window.location.reload();
-                            }}
-                          >
-                            Save & Apply URL
-                          </button>
-                        </div>
-                        <small style={{ color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
-                          Configure the IP/domain that this device connects to. For mobile installs, this specifies the active server.
-                        </small>
-                      </div>
-                    </div>
-
-                    {/* Category Manager (Admin Only) */}
+                    {/* Health Check Details */}
                     <div className="panel">
-                      <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <h3 className="panel-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <Folder size={18} style={{ color: 'var(--accent-indigo)' }} /> Global Categories
-                        </h3>
-                        <button 
-                          className="btn btn-secondary btn-sm"
-                          style={{ padding: '4px 8px', fontSize: '0.75rem' }}
-                          onClick={() => setShowAddCategory(true)}
-                        >
-                          + New Category
-                        </button>
+                      <div className="panel-header">
+                        <h3 className="panel-title"><ShieldAlert size={18} style={{ color: 'var(--accent-cyan)' }} /> System Integrity Checklist</h3>
                       </div>
                       
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '350px', overflowY: 'auto' }}>
-                        {categories.map(cat => (
-                          <div 
-                            key={cat.id} 
-                            style={{ 
-                              display: 'flex', 
-                              justifyContent: 'space-between', 
-                              alignItems: 'center', 
-                              padding: '8px 12px', 
-                              background: 'rgba(255,255,255,0.03)', 
-                              border: '1px solid rgba(255,255,255,0.05)',
-                              borderRadius: '6px' 
-                            }}
-                          >
-                            <div style={{ flexGrow: 1, minWidth: 0, paddingRight: '8px' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                                <strong style={{ color: 'white', fontSize: '0.85rem' }}>{cat.name}</strong>
-                                <span className="badge badge-info" style={{ fontSize: '0.7rem', padding: '1px 5px' }}>
-                                  {cat.asset_count || 0} {cat.asset_count === 1 ? 'item' : 'items'}
-                                </span>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                        {/* Negative Stock check */}
+                        <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', paddingBottom: '12px', borderBottom: '1px solid var(--border-color)' }}>
+                          <div style={{ color: adminDiagnostics.health?.negativeQuantities?.length > 0 ? 'var(--accent-rose)' : 'var(--accent-teal)', marginTop: '2px' }}>
+                            {adminDiagnostics.health?.negativeQuantities?.length > 0 ? <AlertCircle size={20} /> : <CheckCircle size={20} />}
+                          </div>
+                          <div>
+                            <strong style={{ color: 'white', fontSize: '0.9rem', display: 'block' }}>Negative Quantities Check</strong>
+                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                              {adminDiagnostics.health?.negativeQuantities?.length > 0 
+                                ? `Found ${adminDiagnostics.health.negativeQuantities.length} items with negative stock counts. Please override them to 0.`
+                                : "Healthy. No negative stock balances detected."}
+                            </span>
+                            {adminDiagnostics.health?.negativeQuantities?.length > 0 && (
+                              <div style={{ marginTop: '8px', maxHeight: '120px', overflowY: 'auto' }}>
+                                <table className="custom-table" style={{ fontSize: '0.75rem' }}>
+                                  <thead>
+                                    <tr><th>Barcode ID</th><th>Name</th><th>Count</th></tr>
+                                  </thead>
+                                  <tbody>
+                                    {adminDiagnostics.health.negativeQuantities.map(item => (
+                                      <tr key={item.id}><td>{item.id}</td><td>{item.name}</td><td style={{ color: 'var(--accent-rose)' }}>{item.quantity}</td></tr>
+                                    ))}
+                                  </tbody>
+                                </table>
                               </div>
-                              {cat.description && (
-                                <p style={{ margin: '2px 0 0 0', fontSize: '0.75rem', color: 'var(--text-secondary)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                                  {cat.description}
-                                </p>
-                              )}
-                            </div>
-                            {cat.name.toLowerCase() !== 'uncategorized' && (
-                              <button 
-                                className="btn btn-circle btn-sm btn-icon-only" 
-                                style={{ color: 'var(--accent-rose)', border: 'none', background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                                onClick={() => handleDeleteCategory(cat.id, cat.name)}
-                                title="Delete global category"
-                              >
-                                <Trash2 size={14} />
-                              </button>
                             )}
                           </div>
-                        ))}
+                        </div>
+
+                        {/* Orphaned Locations Check */}
+                        <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', paddingBottom: '12px', borderBottom: '1px solid var(--border-color)' }}>
+                          <div style={{ color: adminDiagnostics.health?.orphanedLocations?.length > 0 ? 'var(--accent-rose)' : 'var(--accent-teal)', marginTop: '2px' }}>
+                            {adminDiagnostics.health?.orphanedLocations?.length > 0 ? <AlertCircle size={20} /> : <CheckCircle size={20} />}
+                          </div>
+                          <div>
+                            <strong style={{ color: 'white', fontSize: '0.9rem', display: 'block' }}>Orphaned Garage References</strong>
+                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                              {adminDiagnostics.health?.orphanedLocations?.length > 0 
+                                ? `Detected ${adminDiagnostics.health.orphanedLocations.length} items assigned to locations that have been deleted.`
+                                : "Healthy. All materials assigned to valid garages."}
+                            </span>
+                            {adminDiagnostics.health?.orphanedLocations?.length > 0 && (
+                              <div style={{ marginTop: '8px' }}>
+                                <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '0.8rem', color: 'var(--accent-rose)' }}>
+                                  {adminDiagnostics.health.orphanedLocations.map(item => (
+                                    <li key={item.id}>{item.name} (Barcode: {item.id})</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Orphaned Categories Check */}
+                        <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', paddingBottom: '12px', borderBottom: '1px solid var(--border-color)' }}>
+                          <div style={{ color: adminDiagnostics.health?.orphanedCategories?.length > 0 ? 'var(--accent-amber)' : 'var(--accent-teal)', marginTop: '2px' }}>
+                            {adminDiagnostics.health?.orphanedCategories?.length > 0 ? <AlertCircle size={20} /> : <CheckCircle size={20} />}
+                          </div>
+                          <div>
+                            <strong style={{ color: 'white', fontSize: '0.9rem', display: 'block' }}>Orphaned Material Categories</strong>
+                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                              {adminDiagnostics.health?.orphanedCategories?.length > 0 
+                                ? `Detected ${adminDiagnostics.health.orphanedCategories.length} items with category tags missing from the categories manager registry.`
+                                : "Healthy. All category labels registered globally."}
+                            </span>
+                            {adminDiagnostics.health?.orphanedCategories?.length > 0 && (
+                              <div style={{ marginTop: '8px' }}>
+                                <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '0.8rem', color: 'var(--accent-amber)' }}>
+                                  {adminDiagnostics.health.orphanedCategories.map(item => (
+                                    <li key={item.id}>{item.name} (Category: {item.category})</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Missing Barcodes / SKU Check */}
+                        <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', paddingBottom: '12px', borderBottom: '1px solid var(--border-color)' }}>
+                          <div style={{ color: adminDiagnostics.health?.missingSKUs?.length > 0 ? 'var(--accent-amber)' : 'var(--accent-teal)', marginTop: '2px' }}>
+                            {adminDiagnostics.health?.missingSKUs?.length > 0 ? <AlertCircle size={20} /> : <CheckCircle size={20} />}
+                          </div>
+                          <div>
+                            <strong style={{ color: 'white', fontSize: '0.9rem', display: 'block' }}>Missing Manufacturer SKU References</strong>
+                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                              {adminDiagnostics.health?.missingSKUs?.length > 0 
+                                ? `Found ${adminDiagnostics.health.missingSKUs.length} items missing manufacturer reference part numbers (SKUs).`
+                                : "Healthy. All parts mapped with SKU numbers."}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Missing Serials Check */}
+                        <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                          <div style={{ color: adminDiagnostics.health?.missingSerials?.length > 0 ? 'var(--text-secondary)' : 'var(--accent-teal)', marginTop: '2px' }}>
+                            {adminDiagnostics.health?.missingSerials?.length > 0 ? <Info size={20} /> : <CheckCircle size={20} />}
+                          </div>
+                          <div>
+                            <strong style={{ color: 'white', fontSize: '0.9rem', display: 'block' }}>Missing Serial Numbers</strong>
+                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                              {adminDiagnostics.health?.missingSerials?.length > 0 
+                                ? `${adminDiagnostics.health.missingSerials.length} registered assets do not have serial numbers assigned. (Informational only)`
+                                : "Healthy. All active items possess serial tags."}
+                            </span>
+                          </div>
+                        </div>
+
                       </div>
                     </div>
                   </>
                 )}
-
               </div>
+            )}
 
-              {/* Right Column: Database Maintenance Tools (Admin Only) */}
-              {isAdmin && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                  
-                  {/* SQLite Database Backup & Restore */}
-                  <div className="panel">
-                    <div className="panel-header">
-                      <h3 className="panel-title"><Download size={18} style={{ color: 'var(--accent-teal)' }} /> Database Backup & Restore</h3>
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                      <div>
-                        <h4 style={{ fontSize: '0.9rem', marginBottom: '4px' }}>Download Database File</h4>
-                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '8px' }}>
-                          Download the active SQLite database file (`inventory.db`) directly.
-                        </p>
-                        <button className="btn btn-primary" style={{ width: '100%' }} onClick={handleDownloadDbBackup}>
-                          <Download size={14} /> Download SQLite DB
-                        </button>
-                      </div>
-
-                      <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-                        <h4 style={{ fontSize: '0.9rem', marginBottom: '4px', color: 'var(--accent-rose)' }}>Restore Database File</h4>
-                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '12px' }}>
-                          Upload a previously backed up `.db` file. This will fully replace the active inventory dataset.
-                        </p>
-                        <input 
-                          type="file" 
-                          accept=".db" 
-                          id="db-restore-upload"
-                          style={{ display: 'none' }} 
-                          onChange={(e) => handleRestoreDbBackup(e.target.files[0])}
-                        />
-                        <label 
-                          htmlFor="db-restore-upload" 
-                          className="btn btn-secondary" 
-                          style={{ 
-                            width: '100%', 
-                            display: 'flex', 
-                            alignItems: 'center', 
-                            justifyContent: 'center', 
-                            gap: '6px',
-                            cursor: 'pointer',
-                            padding: '10px'
-                          }}
-                        >
-                          <ArrowLeftRight size={14} /> Upload & Restore DB File
-                        </label>
-                      </div>
-                    </div>
+            {/* TAB CONTENT: BACKUPS */}
+            {isAdmin && settingsTab === 'backups' && (
+              <div className="dashboard-layout" style={{ gridTemplateColumns: '1fr 1fr' }}>
+                {/* SQLite Database Backup & Restore */}
+                <div className="panel">
+                  <div className="panel-header">
+                    <h3 className="panel-title"><Download size={18} style={{ color: 'var(--accent-teal)' }} /> Direct File Operations</h3>
                   </div>
-
-                  {/* Rolling 7-Day Backups */}
-                  <div className="panel">
-                    <div className="panel-header">
-                      <h3 className="panel-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <History size={18} style={{ color: 'var(--accent-indigo)' }} /> Rolling 7-Day Backups
-                      </h3>
-                    </div>
-                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '16px' }}>
-                      Database states are automatically backed up daily in a rolling 7-day loop.
-                    </p>
-                    
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                      {backups.map(b => (
-                        <div 
-                          key={b.day} 
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            padding: '10px 12px',
-                            background: 'rgba(255, 255, 255, 0.02)',
-                            border: '1px solid rgba(255, 255, 255, 0.05)',
-                            borderRadius: '8px'
-                          }}
-                        >
-                          <div style={{ minWidth: 0, flex: 1 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <strong style={{ color: 'white', fontSize: '0.85rem' }}>{b.day}</strong>
-                              {b.exists ? (
-                                <span className="badge badge-success" style={{ fontSize: '0.65rem', padding: '1px 5px' }}>
-                                  Active ({b.size})
-                                </span>
-                              ) : (
-                                <span className="badge" style={{ fontSize: '0.65rem', padding: '1px 5px', backgroundColor: 'var(--bg-app)', color: 'var(--text-secondary)' }}>
-                                  Empty
-                                </span>
-                              )}
-                            </div>
-                            {b.exists && b.timestamp && (
-                              <p style={{ margin: '4px 0 0 0', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                                Saved: {new Date(b.timestamp).toLocaleString()}
-                              </p>
-                            )}
-                          </div>
-                          {b.exists && (
-                            <div style={{ display: 'flex', gap: '6px' }}>
-                              <button 
-                                className="btn btn-secondary btn-sm"
-                                style={{ padding: '4px 8px', fontSize: '0.75rem', borderColor: 'var(--accent-indigo)', color: 'var(--accent-indigo)', background: 'transparent' }}
-                                onClick={() => handleDownloadLocalBackup(b.filename)}
-                                title="Download backup file"
-                              >
-                                <Download size={12} />
-                              </button>
-                              <button 
-                                className="btn btn-secondary btn-sm"
-                                style={{ padding: '4px 8px', fontSize: '0.75rem', borderColor: 'var(--accent-amber)', color: 'var(--accent-amber)', background: 'transparent' }}
-                                onClick={() => handleLocalRestoreBackup(b.filename, b.day)}
-                                title="Restore this state"
-                              >
-                                <RotateCcw size={12} /> Restore
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Hosted Mobile Application APK */}
-                  <div className="panel">
-                    <div className="panel-header">
-                      <h3 className="panel-title"><Package size={18} style={{ color: 'var(--accent-cyan)' }} /> Mobile App Hosting (APK)</h3>
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                      <div>
-                        <h4 style={{ fontSize: '0.9rem', marginBottom: '4px' }}>Upload Mobile APK</h4>
-                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '12px' }}>
-                          Upload the compiled Android `.apk` file so engineers can download it directly from the login page.
-                        </p>
-                        <input 
-                          type="file" 
-                          accept=".apk" 
-                          id="apk-upload-input"
-                          style={{ display: 'none' }} 
-                          onChange={(e) => handleUploadApk(e.target.files[0])}
-                        />
-                        <label 
-                          htmlFor="apk-upload-input" 
-                          className="btn btn-primary" 
-                          style={{ 
-                            width: '100%', 
-                            display: 'flex', 
-                            alignItems: 'center', 
-                            justifyContent: 'center', 
-                            gap: '6px',
-                            cursor: 'pointer',
-                            padding: '10px'
-                          }}
-                        >
-                          <Plus size={14} /> Select & Host APK File
-                        </label>
-                      </div>
-
-                      <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-                        <h4 style={{ fontSize: '0.9rem', marginBottom: '4px' }}>Public Download Endpoint</h4>
-                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '8px' }}>
-                          Share this URL with users to install the mobile companion application:
-                        </p>
-                        <input 
-                          type="text" 
-                          className="form-control" 
-                          readOnly 
-                          value={`${window.location.origin}/download-apk`} 
-                          onClick={(e) => { e.target.select(); document.execCommand('copy'); alert("Link copied!"); }}
-                          style={{ fontSize: '0.8rem', cursor: 'pointer', background: '#1e293b' }}
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Git Update Center */}
-                  <div className="panel">
-                    <div className="panel-header">
-                      <h3 className="panel-title"><History size={18} style={{ color: 'var(--accent-amber)' }} /> Git Update Center</h3>
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                        Keep your public VPS installation synced with your GitHub repository code updates.
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div>
+                      <h4 style={{ fontSize: '0.9rem', marginBottom: '4px', color: 'white' }}>Download SQLite Database File</h4>
+                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '12px' }}>
+                        Backup your system locally. Generates a download of the active SQLite dataset (`inventory.db`).
                       </p>
-                      
-                      <div style={{ background: '#1e293b', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px' }}>
-                        <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--accent-amber)', fontWeight: '600', display: 'block', marginBottom: '6px' }}>
-                          How to update VPS container:
-                        </span>
-                        <pre style={{ 
-                          margin: 0, 
-                          fontSize: '0.75rem', 
-                          fontFamily: 'monospace', 
-                          whiteSpace: 'pre-wrap', 
-                          color: 'var(--text-secondary)',
-                          lineHeight: '1.4'
-                        }}>
-                          # 1. SSH into CasaOS / VPS terminal{"\n"}
-                          cd /home/casaos/AssetManager{"\n"}{"\n"}
-                          # 2. Pull from master/main repo{"\n"}
-                          git pull origin master{"\n"}{"\n"}
-                          # 3. Rebuild and restart container{"\n"}
-                          docker-compose down{"\n"}
-                          docker-compose up -d --build
-                        </pre>
-                      </div>
-
-                      <button 
-                        className="btn btn-secondary" 
-                        onClick={() => alert("Checking repository state... System is fully up-to-date with your GitHub branch.")}
-                      >
-                        Check for Code Updates
+                      <button className="btn btn-primary" style={{ width: '100%' }} onClick={handleDownloadDbBackup}>
+                        <Download size={14} style={{ marginRight: '4px' }} /> Download inventory.db
                       </button>
                     </div>
-                  </div>
 
-                  {/* JSON Backup & Purging */}
-                  <div className="panel">
-                    <div className="panel-header">
-                      <h3 className="panel-title"><ShieldAlert size={18} /> Legacy Maintenance Tools</h3>
+                    <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+                      <h4 style={{ fontSize: '0.9rem', marginBottom: '4px', color: 'var(--accent-rose)' }}>Upload & Restore Database</h4>
+                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '12px' }}>
+                        Overwrites the current server dataset with a previously stored `.db` database clone.
+                      </p>
+                      <input 
+                        type="file" 
+                        accept=".db" 
+                        id="db-restore-upload"
+                        style={{ display: 'none' }} 
+                        onChange={(e) => handleRestoreDbBackup(e.target.files[0])}
+                      />
+                      <label 
+                        htmlFor="db-restore-upload" 
+                        className="btn btn-secondary" 
+                        style={{ 
+                          width: '100%', 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          justifyContent: 'center', 
+                          gap: '6px',
+                          cursor: 'pointer',
+                          padding: '10px'
+                        }}
+                      >
+                        <ArrowLeftRight size={14} /> Restore SQLite DB File
+                      </label>
                     </div>
+                  </div>
+                </div>
+
+                {/* Rolling 7-Day backups */}
+                <div className="panel">
+                  <div className="panel-header">
+                    <h3 className="panel-title"><History size={18} style={{ color: 'var(--accent-indigo)' }} /> Rolling backups</h3>
+                  </div>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '16px' }}>
+                    Backups are taken automatically once per day in rolling weekly slots (Sunday-Saturday).
+                  </p>
+                  
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {backups.map(b => (
+                      <div 
+                        key={b.day} 
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '10px 12px',
+                          background: 'rgba(255, 255, 255, 0.02)',
+                          border: '1px solid rgba(255, 255, 255, 0.05)',
+                          borderRadius: '8px'
+                        }}
+                      >
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <strong style={{ color: 'white', fontSize: '0.85rem' }}>{b.day}</strong>
+                            {b.exists ? (
+                              <span className="badge badge-success" style={{ fontSize: '0.65rem', padding: '1px 5px' }}>
+                                Active ({b.size})
+                              </span>
+                            ) : (
+                              <span className="badge" style={{ fontSize: '0.65rem', padding: '1px 5px', backgroundColor: 'var(--bg-app)', color: 'var(--text-secondary)' }}>
+                                Empty
+                              </span>
+                            )}
+                          </div>
+                          {b.exists && b.timestamp && (
+                            <p style={{ margin: '4px 0 0 0', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                              Saved: {new Date(b.timestamp).toLocaleString()}
+                            </p>
+                          )}
+                        </div>
+                        {b.exists && (
+                          <div style={{ display: 'flex', gap: '6px' }}>
+                            <button 
+                              className="btn btn-secondary btn-sm"
+                              style={{ padding: '4px 8px', fontSize: '0.75rem', borderColor: 'var(--accent-indigo)', color: 'var(--accent-indigo)', background: 'transparent' }}
+                              onClick={() => handleDownloadLocalBackup(b.filename)}
+                              title="Download backup file"
+                            >
+                              <Download size={12} />
+                            </button>
+                            <button 
+                              className="btn btn-secondary btn-sm"
+                              style={{ padding: '4px 8px', fontSize: '0.75rem', borderColor: 'var(--accent-amber)', color: 'var(--accent-amber)', background: 'transparent' }}
+                              onClick={() => handleLocalRestoreBackup(b.filename, b.day)}
+                              title="Restore this state"
+                            >
+                              <RotateCcw size={12} /> Restore
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB CONTENT: RULES & CATEGORIES */}
+            {isAdmin && settingsTab === 'system' && (
+              <div className="dashboard-layout" style={{ gridTemplateColumns: '1fr 1fr' }}>
+                {/* Warnings thresholds */}
+                <div className="panel">
+                  <div className="panel-header">
+                    <h3 className="panel-title"><Settings size={18} /> Global System Rules</h3>
+                  </div>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label">Default Alert Threshold Level (Global)</label>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <input 
+                        type="number" 
+                        className="form-control" 
+                        defaultValue="5" 
+                        style={{ maxWidth: '100px' }} 
+                      />
+                      <button className="btn btn-secondary" type="button" onClick={() => alert("Global default warning threshold configured to 5 units.")}>
+                        Apply Configuration
+                      </button>
+                    </div>
+                    <small style={{ color: 'var(--text-muted)', marginTop: '8px', display: 'block' }}>
+                      Assets with quantities falling to or below this general value trigger a low stock alert (unless overridden in the specific asset model).
+                    </small>
+                  </div>
+                </div>
+
+                {/* Global Categories List */}
+                <div className="panel">
+                  <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <h3 className="panel-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Folder size={18} style={{ color: 'var(--accent-indigo)' }} /> Global Categories
+                    </h3>
+                    <button 
+                      className="btn btn-secondary btn-sm"
+                      style={{ padding: '4px 8px', fontSize: '0.75rem' }}
+                      onClick={() => setShowAddCategory(true)}
+                    >
+                      + New Category
+                    </button>
+                  </div>
+                  
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '350px', overflowY: 'auto' }}>
+                    {categories.map(cat => (
+                      <div 
+                        key={cat.id} 
+                        style={{ 
+                          display: 'flex', 
+                          justifyContent: 'space-between', 
+                          alignItems: 'center', 
+                          padding: '8px 12px', 
+                          background: 'rgba(255,255,255,0.03)', 
+                          border: '1px solid rgba(255,255,255,0.05)',
+                          borderRadius: '6px' 
+                        }}
+                      >
+                        <div style={{ flexGrow: 1, minWidth: 0, paddingRight: '8px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                            <strong style={{ color: 'white', fontSize: '0.85rem' }}>{cat.name}</strong>
+                            <span className="badge badge-info" style={{ fontSize: '0.7rem', padding: '1px 5px' }}>
+                              {cat.asset_count || 0} {cat.asset_count === 1 ? 'item' : 'items'}
+                            </span>
+                          </div>
+                          {cat.description && (
+                            <p style={{ margin: '2px 0 0 0', fontSize: '0.75rem', color: 'var(--text-secondary)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                              {cat.description}
+                            </p>
+                          )}
+                        </div>
+                        {cat.name.toLowerCase() !== 'uncategorized' && (
+                          <button 
+                            className="btn btn-circle btn-sm btn-icon-only" 
+                            style={{ color: 'var(--accent-rose)', border: 'none', background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                            onClick={() => handleDeleteCategory(cat.id, cat.name)}
+                            title="Delete global category"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB CONTENT: CONTROLS & OVERRIDES */}
+            {isAdmin && settingsTab === 'controls' && (
+              <div className="dashboard-layout" style={{ gridTemplateColumns: '1fr 1fr' }}>
+                
+                {/* Manual Override stock */}
+                <div className="panel">
+                  <div className="panel-header">
+                    <h3 className="panel-title"><ShieldAlert size={18} style={{ color: 'var(--accent-rose)' }} /> Direct Stock Override</h3>
+                  </div>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '16px' }}>
+                    Force-set stock counts without scanning QR codes. This generates an audit log entry.
+                  </p>
+                  
+                  <form onSubmit={handleManualStockOverride}>
+                    <div className="form-group">
+                      <label className="form-label">Select Material / Part</label>
+                      <select 
+                        className="form-control"
+                        value={manualOverrideAsset}
+                        onChange={(e) => {
+                          setManualOverrideAsset(e.target.value);
+                          const asset = assets.find(a => a.id === e.target.value);
+                          if (asset) setManualOverrideQty(asset.quantity);
+                        }}
+                        required
+                      >
+                        <option value="">-- Choose Asset --</option>
+                        {assets.map(a => (
+                          <option key={a.id} value={a.id}>{a.name} (Current: {a.quantity} {a.unit})</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label className="form-label">Absolute Quantity Target</label>
+                        <input 
+                          type="number"
+                          min="0"
+                          className="form-control"
+                          value={manualOverrideQty}
+                          onChange={(e) => setManualOverrideQty(parseInt(e.target.value, 10) || 0)}
+                          required
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Audit Notes / Authority Reason</label>
+                        <input 
+                          type="text"
+                          className="form-control"
+                          placeholder="e.g. Physical inventory count correction"
+                          value={manualOverrideNotes}
+                          onChange={(e) => setManualOverrideNotes(e.target.value)}
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    <button type="submit" className="btn btn-danger" style={{ width: '100%', marginTop: '8px' }}>
+                      Force Stock Overwrite
+                    </button>
+                  </form>
+                </div>
+
+                {/* Hosted Mobile Companion APK */}
+                <div className="panel">
+                  <div className="panel-header">
+                    <h3 className="panel-title"><Package size={18} style={{ color: 'var(--accent-cyan)' }} /> Hosted Mobile APK</h3>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div>
+                      <h4 style={{ fontSize: '0.9rem', marginBottom: '4px', color: 'white' }}>Upload Android APK Package</h4>
+                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '12px' }}>
+                        Host compiled Android `.apk` files directly on this server for standard users to download on login.
+                      </p>
+                      <input 
+                        type="file" 
+                        accept=".apk" 
+                        id="apk-upload-input"
+                        style={{ display: 'none' }} 
+                        onChange={(e) => handleUploadApk(e.target.files[0])}
+                      />
+                      <label 
+                        htmlFor="apk-upload-input" 
+                        className="btn btn-primary" 
+                        style={{ 
+                          width: '100%', 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          justifyContent: 'center', 
+                          gap: '6px',
+                          cursor: 'pointer',
+                          padding: '10px'
+                        }}
+                      >
+                        <Plus size={14} /> Upload & Host APK
+                      </label>
+                    </div>
+
+                    <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+                      <h4 style={{ fontSize: '0.9rem', marginBottom: '4px', color: 'white' }}>Public Download Endpoint</h4>
+                      <input 
+                        type="text" 
+                        className="form-control" 
+                        readOnly 
+                        value={`${window.location.origin}/download-apk`} 
+                        onClick={(e) => { e.target.select(); document.execCommand('copy'); alert("Link copied!"); }}
+                        style={{ fontSize: '0.8rem', cursor: 'pointer', background: '#1e293b' }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Git Updates and Demos */}
+                <div className="panel">
+                  <div className="panel-header">
+                    <h3 className="panel-title"><History size={18} style={{ color: 'var(--accent-amber)' }} /> Git Update Center</h3>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                      Keep your public VPS installation synced with your GitHub repository code updates.
+                    </p>
                     
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                      <div>
-                        <h4 style={{ fontSize: '0.9rem', marginBottom: '4px' }}>Backup Export (JSON)</h4>
-                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '8px' }}>
-                          Export database contents as flat JSON list records.
-                        </p>
-                        <button className="btn btn-secondary" style={{ width: '100%' }} onClick={handleExportBackup}>
-                          <Download size={14} /> Export Backup JSON
+                    <div style={{ background: '#1e293b', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px' }}>
+                      <pre style={{ 
+                        margin: 0, 
+                        fontSize: '0.75rem', 
+                        fontFamily: 'monospace', 
+                        whiteSpace: 'pre-wrap', 
+                        color: 'var(--text-secondary)',
+                        lineHeight: '1.4'
+                      }}>
+                        cd /home/casaos/AssetManager{"\n"}
+                        git pull origin master{"\n"}
+                        docker-compose down && docker-compose up -d --build
+                      </pre>
+                    </div>
+
+                    <button 
+                      className="btn btn-secondary" 
+                      onClick={() => alert("Checking repository state... System is fully up-to-date with your GitHub branch.")}
+                    >
+                      Check for Code Updates
+                    </button>
+                  </div>
+                </div>
+
+                {/* Demo Utilities */}
+                <div className="panel">
+                  <div className="panel-header">
+                    <h3 className="panel-title"><ShieldAlert size={18} /> Legacy Maintenance Tools</h3>
+                  </div>
+                  
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div>
+                      <h4 style={{ fontSize: '0.9rem', marginBottom: '4px', color: 'white' }}>Backup Export (JSON)</h4>
+                      <button className="btn btn-secondary" style={{ width: '100%' }} onClick={handleExportBackup}>
+                        <Download size={14} style={{ marginRight: '4px' }} /> Export Backup JSON
+                      </button>
+                    </div>
+
+                    <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px', display: 'flex', gap: '12px' }}>
+                      <div style={{ flex: 1 }}>
+                        <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.85rem' }} onClick={handleSeedActivity}>
+                          <Plus size={14} /> Seed Mock Logs
                         </button>
                       </div>
-
-                      <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-                        <h4 style={{ fontSize: '0.9rem', marginBottom: '4px' }}>Seed Mock Activity Feed</h4>
-                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '8px' }}>
-                          Populates mock checkout logs for interface demo testing.
-                        </p>
-                        <button className="btn btn-primary" style={{ width: '100%' }} onClick={handleSeedActivity}>
-                          <Plus size={14} /> Seed Test Activity Logs
-                        </button>
-                      </div>
-
-                      <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-                        <h4 style={{ fontSize: '0.9rem', marginBottom: '4px', color: 'var(--accent-rose)' }}>Purge Transaction History</h4>
-                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '8px' }}>
-                          Deletes all global audit logs from the transactions table.
-                        </p>
-                        <button className="btn btn-danger" style={{ width: '100%' }} onClick={handlePurgeLogs}>
+                      <div style={{ flex: 1 }}>
+                        <button className="btn btn-danger" style={{ width: '100%', fontSize: '0.85rem' }} onClick={handlePurgeLogs}>
                           <Trash2 size={14} /> Purge Audit Logs
                         </button>
                       </div>
                     </div>
                   </div>
-
                 </div>
-              )}
-            </div>
+
+              </div>
+            )}
           </div>
         )}
-
         {/* Form Drawer Modal: Change Password */}
         {showChangePasswordModal && (
           <div className="drawer-backdrop" style={{ zIndex: 3001 }} onClick={() => setShowChangePasswordModal(false)}>
@@ -5106,12 +5449,11 @@ function App() {
                 <p style={{ fontSize: '1.05rem', fontWeight: '600', fontFamily: 'monospace' }}>{activeAsset.sku || 'N/A'}</p>
               </div>
             </div>
-
-            {/* Extended attributes: Serial Number / Warranty (Only shown if at least one is present) */}
-            {(activeAsset.serial_number || activeAsset.warranty_expiry) && (
+            {/* Extended attributes: Serial Number, Warranty, Price, Supplier */}
+            {(activeAsset.serial_number || activeAsset.warranty_expiry || activeAsset.purchase_price || activeAsset.supplier_name || activeAsset.supplier_url) && (
               <div className="panel" style={{ padding: '14px', marginTop: '-12px', marginBottom: '24px' }}>
                 <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>
-                  Extended Information
+                  Extended & Supplier Information
                 </span>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {activeAsset.serial_number && (
@@ -5126,10 +5468,36 @@ function App() {
                       <strong style={{ color: 'white' }}>{activeAsset.warranty_expiry}</strong>
                     </div>
                   )}
+                  {activeAsset.purchase_price > 0 && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+                      <span style={{ color: 'var(--text-secondary)' }}>Unit Purchase Cost</span>
+                      <strong style={{ color: 'var(--accent-cyan)' }}>
+                        {new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(activeAsset.purchase_price)}
+                      </strong>
+                    </div>
+                  )}
+                  {activeAsset.supplier_name && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+                      <span style={{ color: 'var(--text-secondary)' }}>Preferred Supplier</span>
+                      <strong style={{ color: 'white' }}>{activeAsset.supplier_name}</strong>
+                    </div>
+                  )}
+                  {activeAsset.supplier_url && (
+                    <div style={{ marginTop: '4px' }}>
+                      <a 
+                        href={activeAsset.supplier_url} 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="btn btn-secondary" 
+                        style={{ width: '100%', padding: '6px 12px', fontSize: '0.8rem', gap: '6px', textDecoration: 'none', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                      >
+                        <ExternalLink size={12} /> Buy / Reorder From Supplier
+                      </a>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
-
             {/* Other locations where same item/SKU is stored */}
             {otherLocations.length > 0 && (
               <div className="panel" style={{ padding: '14px', marginTop: '-12px', marginBottom: '24px' }}>

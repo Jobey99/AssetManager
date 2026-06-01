@@ -162,7 +162,7 @@ app.get('/api/assets/:id', async (req, res) => {
 // POST /api/assets - Create a new asset
 app.post('/api/assets', async (req, res) => {
   try {
-    let { id, name, description, sku, quantity, unit, location_id, min_quantity, category } = req.body;
+    let { id, name, description, sku, quantity, unit, location_id, min_quantity, category, serial_number, warranty_expiry, purchase_price, supplier_name, supplier_url } = req.body;
 
     if (!name) {
       return res.status(400).json({ error: 'Asset name is required' });
@@ -184,9 +184,25 @@ app.post('/api/assets', async (req, res) => {
     const status = calculateStatus(quantity, min_quantity);
 
     await dbRun(`
-      INSERT INTO assets (id, name, description, sku, quantity, unit, location_id, status, min_quantity, category)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [id, name, description || '', sku || '', quantity, unit || 'pcs', location_id || null, status, min_quantity, category || 'Uncategorized']);
+      INSERT INTO assets (id, name, description, sku, quantity, unit, location_id, status, min_quantity, category, serial_number, warranty_expiry, purchase_price, supplier_name, supplier_url)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      id, 
+      name, 
+      description || '', 
+      sku || '', 
+      quantity, 
+      unit || 'pcs', 
+      location_id || null, 
+      status, 
+      min_quantity, 
+      category || 'Uncategorized',
+      serial_number || null,
+      warranty_expiry || null,
+      parseFloat(purchase_price) || 0.0,
+      supplier_name || null,
+      supplier_url || null
+    ]);
 
     // Record initial transaction
     if (quantity > 0) {
@@ -207,7 +223,7 @@ app.post('/api/assets', async (req, res) => {
 app.put('/api/assets/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, sku, unit, location_id, min_quantity, category } = req.body;
+    const { name, description, sku, unit, location_id, min_quantity, category, serial_number, warranty_expiry, purchase_price, supplier_name, supplier_url } = req.body;
 
     const currentAsset = await dbGet('SELECT * FROM assets WHERE id = ?', [id]);
     if (!currentAsset) {
@@ -222,7 +238,8 @@ app.put('/api/assets/:id', async (req, res) => {
 
     await dbRun(`
       UPDATE assets 
-      SET name = ?, description = ?, sku = ?, unit = ?, location_id = ?, min_quantity = ?, status = ?, category = ?, updated_at = CURRENT_TIMESTAMP
+      SET name = ?, description = ?, sku = ?, unit = ?, location_id = ?, min_quantity = ?, status = ?, category = ?, 
+          serial_number = ?, warranty_expiry = ?, purchase_price = ?, supplier_name = ?, supplier_url = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `, [
       finalName,
@@ -233,6 +250,11 @@ app.put('/api/assets/:id', async (req, res) => {
       minQtyVal,
       newStatus,
       category !== undefined ? category : currentAsset.category,
+      serial_number !== undefined ? serial_number : currentAsset.serial_number,
+      warranty_expiry !== undefined ? warranty_expiry : currentAsset.warranty_expiry,
+      purchase_price !== undefined ? parseFloat(purchase_price) || 0.0 : currentAsset.purchase_price,
+      supplier_name !== undefined ? supplier_name : currentAsset.supplier_name,
+      supplier_url !== undefined ? supplier_url : currentAsset.supplier_url,
       id
     ]);
 
@@ -484,13 +506,13 @@ app.post('/api/transactions', async (req, res) => {
           notes ? `${notes} (Transferred from ${sourceLocationName})` : `Transferred from ${sourceLocationName}`
         ]);
       } else {
-        // Create new asset record at the destination
+        // Create new asset record at the destination copying all fields
         const newAssetId = 'qr-' + crypto.randomBytes(4).toString('hex');
         const initialDestQty = Math.abs(changeVal);
         const destStatus = calculateStatus(initialDestQty, asset.min_quantity);
         await dbRun(`
-          INSERT INTO assets (id, name, description, sku, quantity, unit, location_id, status, min_quantity)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO assets (id, name, description, sku, quantity, unit, location_id, status, min_quantity, category, serial_number, warranty_expiry, purchase_price, supplier_name, supplier_url)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `, [
           newAssetId,
           asset.name,
@@ -500,7 +522,13 @@ app.post('/api/transactions', async (req, res) => {
           asset.unit || 'pcs',
           destLocationId,
           destStatus,
-          asset.min_quantity
+          asset.min_quantity,
+          asset.category || 'Uncategorized',
+          asset.serial_number || null,
+          asset.warranty_expiry || null,
+          asset.purchase_price || 0.0,
+          asset.supplier_name || null,
+          asset.supplier_url || null
         ]);
         await dbRun(`
           INSERT INTO transactions (asset_id, type, quantity_change, location_id, user_name, notes)
@@ -977,6 +1005,101 @@ app.get('/app.apk', (req, res) => {
     res.download(apkPath, 'asset-manager.apk');
   } else {
     res.status(404).send('Mobile app APK file has not been uploaded by the system administrator yet.');
+  }
+});
+
+// GET /api/admin/diagnostics - Database Health and Stats Checks
+app.get('/api/admin/diagnostics', async (req, res) => {
+  if (req.user?.role !== 'Admin') {
+    return res.status(403).json({ error: 'Forbidden: Admin access required' });
+  }
+
+  try {
+    // Totals
+    const assetsCount = await dbGet('SELECT COUNT(*) as count FROM assets');
+    const totalQty = await dbGet('SELECT SUM(quantity) as total FROM assets');
+    const categoriesCount = await dbGet('SELECT COUNT(*) as count FROM categories');
+    const locationsCount = await dbGet('SELECT COUNT(*) as count FROM locations');
+    const usersCount = await dbGet('SELECT COUNT(*) as count FROM users');
+    const transactionsCount = await dbGet('SELECT COUNT(*) as count FROM transactions');
+
+    // Valuation
+    const valuationRow = await dbGet('SELECT SUM(quantity * purchase_price) as total FROM assets');
+    const totalValuation = valuationRow.total || 0;
+
+    // Issues & Health check
+    const negativeQuantities = await dbAll('SELECT id, name, quantity FROM assets WHERE quantity < 0');
+    const lowStockCount = await dbGet("SELECT COUNT(*) as count FROM assets WHERE status = 'Low Stock' OR status = 'Out of Stock'");
+    
+    // Orphaned records (locations that don't exist anymore or categories that don't exist in global table)
+    const orphanedLocations = await dbAll(`
+      SELECT id, name FROM assets 
+      WHERE location_id IS NOT NULL AND location_id NOT IN (SELECT id FROM locations)
+    `);
+    
+    const orphanedCategories = await dbAll(`
+      SELECT id, name, category FROM assets 
+      WHERE category IS NOT NULL AND category != 'Uncategorized' AND category NOT IN (SELECT name FROM categories)
+    `);
+
+    // Missing barcodes / QR codes / serial numbers
+    const missingSKUs = await dbAll("SELECT id, name FROM assets WHERE sku IS NULL OR sku = ''");
+    const missingSerials = await dbAll("SELECT id, name FROM assets WHERE serial_number IS NULL OR serial_number = ''");
+
+    res.json({
+      stats: {
+        totalAssets: assetsCount.count,
+        totalQuantity: totalQty.total || 0,
+        totalCategories: categoriesCount.count,
+        totalLocations: locationsCount.count,
+        totalUsers: usersCount.count,
+        totalTransactions: transactionsCount.count,
+        totalValuation
+      },
+      health: {
+        negativeQuantities,
+        lowStockCount: lowStockCount.count,
+        orphanedLocations,
+        orphanedCategories,
+        missingSKUs,
+        missingSerials
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/admin/export-csv - Export transactions to CSV
+app.get('/api/admin/export-csv', async (req, res) => {
+  if (req.user?.role !== 'Admin') {
+    return res.status(403).json({ error: 'Forbidden: Admin access required' });
+  }
+
+  try {
+    const transactions = await dbAll(`
+      SELECT transactions.*, assets.name as asset_name, locations.name as location_name 
+      FROM transactions 
+      LEFT JOIN assets ON transactions.asset_id = assets.id 
+      LEFT JOIN locations ON transactions.location_id = locations.id 
+      ORDER BY transactions.created_at DESC
+    `);
+
+    // Generate CSV contents
+    let csvContent = 'ID,Date,User,Type,Asset ID,Asset Name,Quantity Change,Location,Notes\r\n';
+    for (const tx of transactions) {
+      const notesClean = tx.notes ? tx.notes.replace(/"/g, '""') : '';
+      const nameClean = tx.asset_name ? tx.asset_name.replace(/"/g, '""') : 'Deleted Item';
+      const locClean = tx.location_name ? tx.location_name.replace(/"/g, '""') : 'Unassigned';
+      
+      csvContent += `${tx.id},"${tx.created_at}","${tx.user_name}","${tx.type}","${tx.asset_id}","${nameClean}",${tx.quantity_change},"${locClean}","${notesClean}"\r\n`;
+    }
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename=zavi_inventory_audit_${Date.now()}.csv`);
+    res.send(csvContent);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 

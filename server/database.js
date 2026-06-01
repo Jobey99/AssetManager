@@ -101,6 +101,11 @@ async function initDatabase() {
         status TEXT DEFAULT 'Available',
         min_quantity INTEGER DEFAULT 0,
         category TEXT DEFAULT 'Uncategorized',
+        serial_number TEXT,
+        warranty_expiry TEXT,
+        purchase_price REAL DEFAULT 0.0,
+        supplier_name TEXT,
+        supplier_url TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
@@ -292,6 +297,27 @@ async function initDatabase() {
     try {
       await dbRun("ALTER TABLE assets ADD COLUMN warranty_expiry TEXT");
       console.log("Added warranty_expiry column to assets table.");
+    } catch (e) {
+      // Column might already exist
+    }
+
+    try {
+      await dbRun("ALTER TABLE assets ADD COLUMN purchase_price REAL DEFAULT 0.0");
+      console.log("Added purchase_price column to assets table.");
+    } catch (e) {
+      // Column might already exist
+    }
+
+    try {
+      await dbRun("ALTER TABLE assets ADD COLUMN supplier_name TEXT");
+      console.log("Added supplier_name column to assets table.");
+    } catch (e) {
+      // Column might already exist
+    }
+
+    try {
+      await dbRun("ALTER TABLE assets ADD COLUMN supplier_url TEXT");
+      console.log("Added supplier_url column to assets table.");
     } catch (e) {
       // Column might already exist
     }
