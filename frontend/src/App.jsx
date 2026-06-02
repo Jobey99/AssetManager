@@ -25,7 +25,11 @@ import {
   User,
   Folder,
   RotateCcw,
-  ExternalLink
+  ExternalLink,
+  Wrench,
+  ShoppingCart,
+  Clock,
+  BookOpen
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import QRCode from 'qrcode';
@@ -140,6 +144,44 @@ function App() {
   const [categories, setCategories] = useState([]);
   const [users, setUsers] = useState([]);
   const [transactions, setTransactions] = useState([]);
+  const [siteInstallations, setSiteInstallations] = useState([]);
+  const [loans, setLoans] = useState([]);
+  const [activeInstall, setActiveInstall] = useState(null);
+  const [editingInstall, setEditingInstall] = useState(null);
+  const [showAddInstall, setShowAddInstall] = useState(false);
+  const [showEditInstall, setShowEditInstall] = useState(false);
+  const [newInstall, setNewInstall] = useState({
+    site_name: '',
+    equipment_name: '',
+    description: '',
+    model_number: '',
+    serial_number: '',
+    install_date: '',
+    warranty_expiry: '',
+    status: 'Active',
+    document_url: '',
+    notes: ''
+  });
+  const [isLoan, setIsLoan] = useState(false);
+  const [loanDueDate, setLoanDueDate] = useState('');
+  const [loanUser, setLoanUser] = useState('');
+  const [installSearchQ, setInstallSearchQ] = useState('');
+  const [installStatusFilter, setInstallStatusFilter] = useState('');
+  const [loansTab, setLoansTab] = useState('active');
+  const [sidebarVisibility, setSidebarVisibility] = useState(() => {
+    const saved = localStorage.getItem('sidebar_visibility');
+    return saved ? JSON.parse(saved) : {
+      locations: true,
+      installations: true,
+      loans: true,
+      shoppingList: true,
+      printer: true
+    };
+  });
+
+  useEffect(() => {
+    localStorage.setItem('sidebar_visibility', JSON.stringify(sidebarVisibility));
+  }, [sidebarVisibility]);
   
   // Print Queue
   const [printQueue, setPrintQueue] = useState([]);
@@ -295,6 +337,8 @@ function App() {
           fetchCategories();
           fetchUsers();
           fetchTransactions();
+          fetchSiteInstallations();
+          fetchLoans();
         }, 100);
       } else {
         setLoginError(data.error || 'Invalid credentials');
@@ -477,6 +521,8 @@ function App() {
       fetchCategories();
       fetchUsers();
       fetchTransactions();
+      fetchSiteInstallations();
+      fetchLoans();
     };
     checkAndFetch();
   }, []);
@@ -608,6 +654,36 @@ function App() {
       console.warn("Using cached transactions:", e);
       const cached = localStorage.getItem('cached_transactions');
       if (cached) setTransactions(JSON.parse(cached));
+    }
+  };
+
+  const fetchSiteInstallations = async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/site-installations`);
+      if (res.ok) {
+        const data = await res.json();
+        setSiteInstallations(data);
+        localStorage.setItem('cached_site_installations', JSON.stringify(data));
+      }
+    } catch (e) {
+      console.warn("Using cached site installations:", e);
+      const cached = localStorage.getItem('cached_site_installations');
+      if (cached) setSiteInstallations(JSON.parse(cached));
+    }
+  };
+
+  const fetchLoans = async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/loans`);
+      if (res.ok) {
+        const data = await res.json();
+        setLoans(data);
+        localStorage.setItem('cached_loans', JSON.stringify(data));
+      }
+    } catch (e) {
+      console.warn("Using cached loans:", e);
+      const cached = localStorage.getItem('cached_loans');
+      if (cached) setLoans(JSON.parse(cached));
     }
   };
 
@@ -1092,6 +1168,48 @@ function App() {
     const targetAssetId = scannedAsset ? scannedAsset.id : activeAsset.id;
 
     try {
+      if (txType === 'CHECK_OUT' && isLoan) {
+        const res = await authFetch(`${API_BASE}/loans`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            asset_id: targetAssetId,
+            user_name: loanUser || txUser || 'System',
+            quantity: txQty,
+            location_id: txLocation || null,
+            due_date: loanDueDate,
+            notes: txNotes
+          })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          setTxSuccessMessage(`Successfully checked out tool on loan!`);
+          setTxNotes('');
+          setTxQty(1);
+          setLoanDueDate('');
+          setLoanUser('');
+          setIsLoan(false);
+          fetchAssets();
+          fetchLoans();
+          fetchTransactions();
+
+          if (scannedAsset) {
+            setTimeout(() => {
+              setScannedAsset(null);
+              setTxSuccessMessage('');
+              setScannerActive(true);
+            }, 2000);
+          } else {
+            fetchAssetDetails(targetAssetId);
+            const updated = assets.map(a => a.id === targetAssetId ? { ...a, quantity: a.quantity - txQty } : a);
+            setAssets(updated);
+          }
+        } else {
+          setTxErrorMessage(data.error || "Failed to create loan.");
+        }
+        return;
+      }
+
       const res = await authFetch(`${API_BASE}/transactions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1460,6 +1578,92 @@ function App() {
       }
     } catch (error) {
       console.error("Export CSV error:", error);
+    }
+  };
+
+  const handleCreateInstall = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await authFetch(`${API_BASE}/site-installations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newInstall)
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSiteInstallations([data, ...siteInstallations]);
+        setShowAddInstall(false);
+        setNewInstall({ site_name: '', equipment_name: '', description: '', model_number: '', serial_number: '', install_date: '', warranty_expiry: '', status: 'Active', document_url: '', notes: '' });
+        alert(`Site installation for '${data.equipment_name}' created successfully!`);
+      } else {
+        alert(data.error || "Failed to create installation.");
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const handleUpdateInstall = async (e) => {
+    e.preventDefault();
+    if (!editingInstall) return;
+    try {
+      const res = await authFetch(`${API_BASE}/site-installations/${editingInstall.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editingInstall)
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSiteInstallations(siteInstallations.map(i => i.id === editingInstall.id ? data : i));
+        if (activeInstall && activeInstall.id === editingInstall.id) {
+          setActiveInstall(data);
+        }
+        setShowEditInstall(false);
+        setEditingInstall(null);
+        alert(`Site installation updated successfully!`);
+      } else {
+        alert(data.error || "Failed to update installation.");
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const handleDeleteInstall = async (id, equipName) => {
+    if (confirm(`Are you sure you want to delete the installation for '${equipName}'?`)) {
+      try {
+        const res = await authFetch(`${API_BASE}/site-installations/${id}`, { method: 'DELETE' });
+        if (res.ok) {
+          setSiteInstallations(siteInstallations.filter(i => i.id !== id));
+          if (activeInstall && activeInstall.id === id) {
+            setActiveInstall(null);
+          }
+          alert("Site installation deleted.");
+        } else {
+          alert("Failed to delete site installation.");
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  };
+
+  const handleReturnLoan = async (loanId) => {
+    try {
+      const res = await authFetch(`${API_BASE}/loans/${loanId}/return`, {
+        method: 'POST'
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert("Tool returned successfully!");
+        fetchLoans();
+        fetchAssets();
+        fetchTransactions();
+      } else {
+        alert(data.error || "Failed to return tool.");
+      }
+    } catch (e) {
+      console.error(e);
     }
   };
 
@@ -1931,6 +2135,268 @@ function App() {
   const handlePrint = () => {
     if (printQueue.length === 0) return;
     window.print();
+  };
+
+  const handleExportShoppingListPDF = () => {
+    const lowStockItems = assets.filter(a => a.quantity <= a.min_quantity);
+    
+    const groupedBySupplier = {};
+    lowStockItems.forEach(item => {
+      const supplier = item.supplier_name || 'Unassigned Supplier';
+      if (!groupedBySupplier[supplier]) {
+        groupedBySupplier[supplier] = [];
+      }
+      groupedBySupplier[supplier].push(item);
+    });
+
+    const supplierNames = Object.keys(groupedBySupplier).sort();
+    let grandTotalCost = 0;
+    let totalUniqueItems = 0;
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert("Please allow popups to export the PDF.");
+      return;
+    }
+
+    let htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Purchase Order & Reorder List</title>
+        <style>
+          body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #1e293b;
+            margin: 0;
+            padding: 24px;
+            font-size: 10pt;
+            line-height: 1.5;
+          }
+          .header-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 30px;
+          }
+          .header-title {
+            font-size: 20pt;
+            font-weight: 700;
+            color: #0f172a;
+            letter-spacing: -0.5px;
+            margin: 0;
+          }
+          .header-meta {
+            text-align: right;
+            color: #64748b;
+            font-size: 9pt;
+          }
+          .supplier-header {
+            font-size: 13pt;
+            font-weight: 700;
+            color: #0f172a;
+            border-bottom: 2px solid #e2e8f0;
+            padding-bottom: 6px;
+            margin-top: 24px;
+            margin-bottom: 12px;
+          }
+          .item-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 24px;
+          }
+          .item-table th {
+            background-color: #f8fafc;
+            color: #475569;
+            font-weight: 600;
+            text-align: left;
+            padding: 8px 12px;
+            border-bottom: 1px solid #cbd5e1;
+            font-size: 8.5pt;
+          }
+          .item-table td {
+            padding: 8px 12px;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 9.5pt;
+          }
+          .qty-badge {
+            font-weight: bold;
+            color: #dc2626;
+          }
+          .link-btn {
+            color: #2563eb;
+            text-decoration: underline;
+            font-weight: 500;
+          }
+          .summary-box {
+            background-color: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 16px;
+            margin-top: 40px;
+            page-break-inside: avoid;
+          }
+          .summary-title {
+            font-size: 11pt;
+            font-weight: 700;
+            margin-top: 0;
+            margin-bottom: 12px;
+            color: #0f172a;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+          }
+          .summary-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 6px;
+            font-size: 9.5pt;
+          }
+          .summary-total {
+            border-top: 1px solid #cbd5e1;
+            padding-top: 8px;
+            margin-top: 8px;
+            font-weight: 700;
+            font-size: 11pt;
+            color: #0f172a;
+          }
+          .sign-block {
+            margin-top: 50px;
+            display: flex;
+            justify-content: space-between;
+            page-break-inside: avoid;
+          }
+          .sign-line {
+            width: 45%;
+            border-top: 1px solid #94a3b8;
+            padding-top: 6px;
+            text-align: center;
+            font-size: 8.5pt;
+            color: #64748b;
+          }
+          @media print {
+            body {
+              padding: 0;
+            }
+          }
+        </style>
+      </head>
+      <body>
+        <table class="header-table">
+          <tr>
+            <td>
+              <h1 class="header-title">Zavi Purchase Requisition</h1>
+              <div style="color: #64748b; font-size: 9.5pt; margin-top: 4px;">Low Stock & Reorder Shopping List</div>
+            </td>
+            <td class="header-meta">
+              <strong>Date:</strong> ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}<br>
+              <strong>Generated By:</strong> ${currentUser?.name || 'System'}<br>
+              <strong>Status:</strong> Pending Approval
+            </td>
+          </tr>
+        </table>
+    `;
+
+    if (lowStockItems.length === 0) {
+      htmlContent += `
+        <div style="text-align: center; padding: 40px; border: 1px dashed #cbd5e1; border-radius: 8px; color: #64748b;">
+          <h3>No Low Stock Items</h3>
+          <p>All items in the material directory are currently above their warning thresholds.</p>
+        </div>
+      `;
+    } else {
+      supplierNames.forEach(supplier => {
+        const items = groupedBySupplier[supplier];
+        htmlContent += `
+          <div class="supplier-header">${supplier}</div>
+          <table class="item-table">
+            <thead>
+              <tr>
+                <th style="width: 35%;">Item Name</th>
+                <th style="width: 15%;">SKU</th>
+                <th style="width: 10%; text-align: center;">Stock</th>
+                <th style="width: 10%; text-align: center;">Min Level</th>
+                <th style="width: 10%; text-align: center;">Reorder Qty</th>
+                <th style="width: 10%; text-align: right;">Unit Cost</th>
+                <th style="width: 10%; text-align: right;">Total Cost</th>
+                <th style="width: 10%; text-align: center;">Link</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
+
+        items.forEach(item => {
+          totalUniqueItems++;
+          const currentQty = item.quantity;
+          const minQty = item.min_quantity;
+          const reorderQty = Math.max(1, minQty - currentQty + 1);
+          const unitPrice = item.purchase_price || 0;
+          const lineCost = reorderQty * unitPrice;
+          grandTotalCost += lineCost;
+
+          htmlContent += `
+            <tr>
+              <td><strong>${item.name}</strong></td>
+              <td style="font-family: monospace; font-size: 8.5pt;">${item.sku || 'N/A'}</td>
+              <td style="text-align: center;" class="qty-badge">${currentQty}</td>
+              <td style="text-align: center;">${minQty}</td>
+              <td style="text-align: center; font-weight: 600;">${reorderQty} ${item.unit || 'pcs'}</td>
+              <td style="text-align: right;">£${unitPrice.toFixed(2)}</td>
+              <td style="text-align: right; font-weight: 600;">£${lineCost.toFixed(2)}</td>
+              <td style="text-align: center;">
+                ${item.supplier_url 
+                  ? `<a href="${item.supplier_url}" class="link-btn" target="_blank">Buy</a>` 
+                  : '<span style="color: #cbd5e1;">—</span>'}
+              </td>
+            </tr>
+          `;
+        });
+
+        htmlContent += `
+            </tbody>
+          </table>
+        `;
+      });
+
+      htmlContent += `
+        <div class="summary-box">
+          <h3 class="summary-title">Summary & Cost Estimations</h3>
+          <div class="summary-row">
+            <span>Total Suppliers:</span>
+            <strong>${supplierNames.length}</strong>
+          </div>
+          <div class="summary-row">
+            <span>Total Unique Items to Purchase:</span>
+            <strong>${totalUniqueItems}</strong>
+          </div>
+          <div class="summary-total">
+            <div style="display: flex; justify-content: space-between;">
+              <span>Estimated Reorder Subtotal:</span>
+              <span>£${grandTotalCost.toFixed(2)}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="sign-block">
+          <div class="sign-line">
+            Requested By (Signature)
+          </div>
+          <div class="sign-line">
+            Approved By (Signature)
+          </div>
+        </div>
+      `;
+    }
+
+    htmlContent += `
+      </body>
+      </html>
+    `;
+
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => {
+      printWindow.print();
+    }, 500);
   };
 
   // Helper stats values
@@ -2446,13 +2912,42 @@ function App() {
             <QrCode size={18} />
             <span>Scan QR Code</span>
           </li>
-          <li 
-            className={`nav-item ${currentView === 'locations' ? 'active' : ''}`}
-            onClick={() => { setCurrentView('locations'); stopScanner(); }}
-          >
-            <MapPin size={18} />
-            <span>Garages & Locations</span>
-          </li>
+          {sidebarVisibility.locations && (
+            <li 
+              className={`nav-item ${currentView === 'locations' ? 'active' : ''}`}
+              onClick={() => { setCurrentView('locations'); stopScanner(); }}
+            >
+              <MapPin size={18} />
+              <span>Garages & Locations</span>
+            </li>
+          )}
+          {sidebarVisibility.installations && (
+            <li 
+              className={`nav-item ${currentView === 'installations' ? 'active' : ''}`}
+              onClick={() => { setCurrentView('installations'); stopScanner(); }}
+            >
+              <Wrench size={18} />
+              <span>Site Installations</span>
+            </li>
+          )}
+          {sidebarVisibility.loans && (
+            <li 
+              className={`nav-item ${currentView === 'loans' ? 'active' : ''}`}
+              onClick={() => { setCurrentView('loans'); stopScanner(); }}
+            >
+              <Clock size={18} />
+              <span>Tool Loans</span>
+            </li>
+          )}
+          {sidebarVisibility.shoppingList && (
+            <li 
+              className={`nav-item ${currentView === 'shopping-list' ? 'active' : ''}`}
+              onClick={() => { setCurrentView('shopping-list'); stopScanner(); }}
+            >
+              <ShoppingCart size={18} />
+              <span>Shopping List</span>
+            </li>
+          )}
           {isAdmin && (
             <li 
               className={`nav-item ${currentView === 'users' ? 'active' : ''}`}
@@ -2462,13 +2957,15 @@ function App() {
               <span>Team & Users</span>
             </li>
           )}
-          <li 
-            className={`nav-item ${currentView === 'printer' ? 'active' : ''}`}
-            onClick={() => { setCurrentView('printer'); stopScanner(); }}
-          >
-            <Printer size={18} />
-            <span>Print Labels ({printQueue.length})</span>
-          </li>
+          {sidebarVisibility.printer && (
+            <li 
+              className={`nav-item ${currentView === 'printer' ? 'active' : ''}`}
+              onClick={() => { setCurrentView('printer'); stopScanner(); }}
+            >
+              <Printer size={18} />
+              <span>Print Labels ({printQueue.length})</span>
+            </li>
+          )}
           {isAdmin ? (
             <li 
               className={`nav-item ${currentView === 'settings' ? 'active' : ''}`}
@@ -2931,6 +3428,80 @@ function App() {
                       </tbody>
                     </table>
                   </div>                )}
+              </div>
+
+              {/* Unified Warranty Expiry Widget */}
+              <div className="panel" style={{ marginTop: '24px' }}>
+                <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <h3 className="panel-title" style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
+                    <ShieldAlert size={18} style={{ color: 'var(--accent-amber)' }} /> Warranty Expiration Tracker
+                  </h3>
+                  {(() => {
+                    const now = new Date();
+                    const limitDate = new Date();
+                    limitDate.setDate(limitDate.getDate() + 90);
+                    const count = assets.filter(a => a.warranty_expiry && new Date(a.warranty_expiry) >= now && new Date(a.warranty_expiry) <= limitDate).length +
+                                  siteInstallations.filter(i => i.warranty_expiry && new Date(i.warranty_expiry) >= now && new Date(i.warranty_expiry) <= limitDate).length;
+                    return count > 0 ? <span className="badge badge-warning">{count} upcoming</span> : null;
+                  })()}
+                </div>
+
+                {(() => {
+                  const now = new Date();
+                  const limitDate = new Date();
+                  limitDate.setDate(limitDate.getDate() + 90);
+                  
+                  const alerts = [];
+                  assets.forEach(a => {
+                    if (a.warranty_expiry) {
+                      const exp = new Date(a.warranty_expiry);
+                      if (exp >= now && exp <= limitDate) {
+                        const days = Math.ceil((exp - now) / (1000 * 60 * 60 * 24));
+                        alerts.push({ name: a.name, type: 'Inventory', detail: a.location_name || 'Warehouse', days, date: a.warranty_expiry });
+                      }
+                    }
+                  });
+                  siteInstallations.forEach(i => {
+                    if (i.warranty_expiry) {
+                      const exp = new Date(i.warranty_expiry);
+                      if (exp >= now && exp <= limitDate) {
+                        const days = Math.ceil((exp - now) / (1000 * 60 * 60 * 24));
+                        alerts.push({ name: i.equipment_name, type: `Site (${i.site_name})`, detail: `Serial: ${i.serial_number || 'N/A'}`, days, date: i.warranty_expiry });
+                      }
+                    }
+                  });
+                  
+                  alerts.sort((a, b) => a.days - b.days);
+
+                  if (alerts.length === 0) {
+                    return <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', margin: 0 }}>No warranties expiring in the next 90 days.</p>;
+                  }
+
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      {alerts.map((al, idx) => {
+                        const badgeColor = al.days <= 30 ? 'var(--accent-rose)' : al.days <= 60 ? 'var(--accent-amber)' : 'var(--accent-indigo)';
+                        const badgeBg = al.days <= 30 ? 'rgba(244, 63, 94, 0.15)' : al.days <= 60 ? 'rgba(245, 158, 11, 0.15)' : 'rgba(99, 102, 241, 0.15)';
+                        return (
+                          <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '8px' }}>
+                            <div style={{ minWidth: 0, flexGrow: 1, paddingRight: '8px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                <strong style={{ color: 'white', fontSize: '0.85rem' }}>{al.name}</strong>
+                                <span className="badge badge-secondary" style={{ fontSize: '0.7rem', padding: '1px 5px', opacity: 0.8 }}>{al.type}</span>
+                              </div>
+                              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginTop: '2px' }}>
+                                {al.detail} • Expires: {new Date(al.date).toLocaleDateString()}
+                              </span>
+                            </div>
+                            <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: badgeColor, backgroundColor: badgeBg, padding: '4px 8px', borderRadius: '6px', whiteSpace: 'nowrap' }}>
+                              {al.days} days left
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Top Moving Parts Widget */}
@@ -4135,6 +4706,55 @@ function App() {
                         </select>
                       </div>
 
+                      {txType === 'CHECK_OUT' && (
+                        <div className="form-group" style={{ marginTop: '12px', padding: '12px', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '6px' }}>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none', margin: 0 }}>
+                            <input 
+                              type="checkbox" 
+                              checked={isLoan} 
+                              onChange={(e) => {
+                                setIsLoan(e.target.checked);
+                                if (e.target.checked) {
+                                  setLoanUser(txUser || (users[0]?.name || ''));
+                                  const nextWeek = new Date();
+                                  nextWeek.setDate(nextWeek.getDate() + 7);
+                                  setLoanDueDate(nextWeek.toISOString().split('T')[0]);
+                                }
+                              }} 
+                            />
+                            <span style={{ fontSize: '0.85rem', color: 'white', fontWeight: '500' }}>Check out as Temporary Tool Loan?</span>
+                          </label>
+                          {isLoan && (
+                            <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                              <div>
+                                <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: '4px' }}>Borrower / Team Member</label>
+                                <select 
+                                  className="form-control" 
+                                  style={{ padding: '6px 8px', fontSize: '0.8rem' }}
+                                  value={loanUser}
+                                  onChange={(e) => setLoanUser(e.target.value)}
+                                >
+                                  {users.map(u => (
+                                    <option key={u.id} value={u.name}>{u.name}</option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div>
+                                <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: '4px' }}>Due Date</label>
+                                <input 
+                                  type="date" 
+                                  className="form-control" 
+                                  style={{ padding: '6px 8px', fontSize: '0.8rem' }}
+                                  value={loanDueDate}
+                                  onChange={(e) => setLoanDueDate(e.target.value)}
+                                  required
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       <div className="form-group">
                         <label className="form-label">Audit Notes / Reason</label>
                         <input 
@@ -5150,6 +5770,85 @@ function App() {
                   </form>
                 </div>
 
+                {/* Sidebar Navigation Settings */}
+                <div className="panel">
+                  <div className="panel-header">
+                    <h3 className="panel-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Settings size={18} style={{ color: 'var(--accent-cyan)' }} /> Sidebar View Controls
+                    </h3>
+                  </div>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '16px' }}>
+                    Show or hide specific sidebar navigation views to prevent dashboard clutter and user confusion.
+                  </p>
+                  
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '6px' }}>
+                      <div>
+                        <strong style={{ color: 'white', fontSize: '0.85rem', display: 'block' }}>Garages & Locations</strong>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Display storage garages, vehicles, and areas</span>
+                      </div>
+                      <input 
+                        type="checkbox"
+                        checked={sidebarVisibility.locations}
+                        onChange={(e) => setSidebarVisibility(prev => ({ ...prev, locations: e.target.checked }))}
+                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '6px' }}>
+                      <div>
+                        <strong style={{ color: 'white', fontSize: '0.85rem', display: 'block' }}>Site Installations</strong>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Track hardware, warranties, and site documents</span>
+                      </div>
+                      <input 
+                        type="checkbox"
+                        checked={sidebarVisibility.installations}
+                        onChange={(e) => setSidebarVisibility(prev => ({ ...prev, installations: e.target.checked }))}
+                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '6px' }}>
+                      <div>
+                        <strong style={{ color: 'white', fontSize: '0.85rem', display: 'block' }}>Tool Loans</strong>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Temporary tool checkouts to team engineers</span>
+                      </div>
+                      <input 
+                        type="checkbox"
+                        checked={sidebarVisibility.loans}
+                        onChange={(e) => setSidebarVisibility(prev => ({ ...prev, loans: e.target.checked }))}
+                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '6px' }}>
+                      <div>
+                        <strong style={{ color: 'white', fontSize: '0.85rem', display: 'block' }}>Shopping List</strong>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Supplier grouping and printable PO sheets</span>
+                      </div>
+                      <input 
+                        type="checkbox"
+                        checked={sidebarVisibility.shoppingList}
+                        onChange={(e) => setSidebarVisibility(prev => ({ ...prev, shoppingList: e.target.checked }))}
+                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '6px' }}>
+                      <div>
+                        <strong style={{ color: 'white', fontSize: '0.85rem', display: 'block' }}>Print Labels</strong>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Batch label printing and QR layouts</span>
+                      </div>
+                      <input 
+                        type="checkbox"
+                        checked={sidebarVisibility.printer}
+                        onChange={(e) => setSidebarVisibility(prev => ({ ...prev, printer: e.target.checked }))}
+                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
                 {/* Hosted Mobile Companion APK */}
                 <div className="panel">
                   <div className="panel-header">
@@ -5264,6 +5963,741 @@ function App() {
 
               </div>
             )}
+          </div>
+        )}
+
+        {currentView === 'installations' && (
+          <div>
+            <div className="page-header">
+              <div className="page-title-group">
+                <h1>Site Installations Registry</h1>
+                <p>Track hardware assets, warranties, and manuals deployed at client sites.</p>
+              </div>
+              <div className="header-actions">
+                <button className="btn btn-primary" onClick={() => {
+                  setNewInstall({
+                    site_name: '',
+                    equipment_name: '',
+                    description: '',
+                    model_number: '',
+                    serial_number: '',
+                    install_date: new Date().toISOString().split('T')[0],
+                    warranty_expiry: '',
+                    status: 'Active',
+                    document_url: '',
+                    notes: ''
+                  });
+                  setShowAddInstall(true);
+                }}>
+                  <Plus size={16} /> New Installation
+                </button>
+              </div>
+            </div>
+
+            {/* Filters */}
+            <div className="panel" style={{ padding: '16px', display: 'flex', flexWrap: 'wrap', gap: '16px', alignItems: 'center' }}>
+              <div className="search-container">
+                <Search size={18} className="search-icon" />
+                <input 
+                  type="text" 
+                  className="form-control search-input" 
+                  placeholder="Search site, equipment, serial..."
+                  value={installSearchQ}
+                  onChange={(e) => setInstallSearchQ(e.target.value)}
+                />
+              </div>
+
+              <select 
+                className="form-control" 
+                style={{ width: 'auto', minWidth: '180px' }}
+                value={installStatusFilter}
+                onChange={(e) => setInstallStatusFilter(e.target.value)}
+              >
+                <option value="">All Statuses</option>
+                <option value="Active">Active / Installed</option>
+                <option value="Maintenance">Under Maintenance</option>
+                <option value="Retired">Retired / Decommissioned</option>
+              </select>
+
+              {(installSearchQ || installStatusFilter) && (
+                <button className="btn btn-secondary" style={{ padding: '8px 12px' }} onClick={() => { setInstallSearchQ(''); setInstallStatusFilter(''); }}>
+                  Clear Filters
+                </button>
+              )}
+            </div>
+
+            {/* Installations List */}
+            <div className="panel">
+              <div className="table-container">
+                <table className="custom-table">
+                  <thead>
+                    <tr>
+                      <th>Site / Location</th>
+                      <th>Equipment Name</th>
+                      <th>Model / SKU</th>
+                      <th>Serial Number</th>
+                      <th>Install Date</th>
+                      <th>Warranty Expiry</th>
+                      <th>Status</th>
+                      <th style={{ textAlign: 'right' }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {siteInstallations
+                      .filter(inst => {
+                        const q = installSearchQ.toLowerCase();
+                        const matchesSearch = 
+                          inst.site_name.toLowerCase().includes(q) ||
+                          inst.equipment_name.toLowerCase().includes(q) ||
+                          (inst.serial_number || '').toLowerCase().includes(q) ||
+                          (inst.model_number || '').toLowerCase().includes(q);
+                        const matchesStatus = !installStatusFilter || inst.status === installStatusFilter;
+                        return matchesSearch && matchesStatus;
+                      })
+                      .map(inst => {
+                        const now = new Date();
+                        let expiryBadgeClass = 'badge-success';
+                        if (inst.warranty_expiry) {
+                          const expiryDate = new Date(inst.warranty_expiry);
+                          const diffDays = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
+                          if (diffDays <= 30) {
+                            expiryBadgeClass = 'badge-danger';
+                          } else if (diffDays <= 90) {
+                            expiryBadgeClass = 'badge-warning';
+                          }
+                        }
+
+                        return (
+                          <tr key={inst.id} style={{ cursor: 'pointer' }} onClick={() => setActiveInstall(inst)}>
+                            <td style={{ fontWeight: '600', color: 'white' }}>{inst.site_name}</td>
+                            <td>{inst.equipment_name}</td>
+                            <td style={{ fontFamily: 'monospace' }}>{inst.model_number || '—'}</td>
+                            <td style={{ fontFamily: 'monospace' }}>{inst.serial_number || '—'}</td>
+                            <td>{inst.install_date ? new Date(inst.install_date).toLocaleDateString() : '—'}</td>
+                            <td>
+                              {inst.warranty_expiry ? (
+                                <span className={`badge ${expiryBadgeClass}`} style={{ fontSize: '0.8rem' }}>
+                                  {new Date(inst.warranty_expiry).toLocaleDateString()}
+                                </span>
+                              ) : (
+                                <span style={{ color: 'var(--text-muted)' }}>—</span>
+                              )}
+                            </td>
+                            <td>
+                              <span className={`badge ${
+                                inst.status === 'Active' ? 'badge-success' : 
+                                inst.status === 'Maintenance' ? 'badge-warning' : 'badge-danger'
+                              }`}>
+                                {inst.status}
+                              </span>
+                            </td>
+                            <td style={{ textAlign: 'right' }} onClick={e => e.stopPropagation()}>
+                              <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                                <button className="btn btn-secondary btn-icon-only btn-sm" onClick={() => { setEditingInstall(inst); setShowEditInstall(true); }}>
+                                  <Edit size={12} />
+                                </button>
+                                <button className="btn btn-secondary btn-icon-only btn-sm" style={{ color: 'var(--accent-rose)' }} onClick={() => handleDeleteInstall(inst.id, inst.equipment_name)}>
+                                  <Trash2 size={12} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    {siteInstallations.length === 0 && (
+                      <tr>
+                        <td colSpan="8" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>
+                          No site installations found. Click 'New Installation' to register deployed hardware.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Slide-out Drawer: Active Installation Details */}
+            {activeInstall && (
+              <div className="drawer-backdrop" onClick={() => setActiveInstall(null)}>
+                <div className="drawer" onClick={(e) => e.stopPropagation()}>
+                  <div className="drawer-header">
+                    <div>
+                      <span className="badge badge-info" style={{ marginBottom: '4px' }}>Installation Details</span>
+                      <h2>{activeInstall.equipment_name}</h2>
+                    </div>
+                    <button className="drawer-close" onClick={() => setActiveInstall(null)}><X size={20} /></button>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '24px' }}>
+                    <div className="panel" style={{ padding: '14px', margin: '0' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Client Site</span>
+                      <p style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>{activeInstall.site_name}</p>
+                    </div>
+                    <div className="panel" style={{ padding: '14px', margin: '0' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Deployment Status</span>
+                      <p style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>{activeInstall.status}</p>
+                    </div>
+                    <div className="panel" style={{ padding: '14px', margin: '0' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Model / Reference</span>
+                      <p style={{ fontSize: '1.05rem', fontWeight: '600', fontFamily: 'monospace' }}>{activeInstall.model_number || '—'}</p>
+                    </div>
+                    <div className="panel" style={{ padding: '14px', margin: '0' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Serial Number</span>
+                      <p style={{ fontSize: '1.05rem', fontWeight: '600', fontFamily: 'monospace' }}>{activeInstall.serial_number || '—'}</p>
+                    </div>
+                  </div>
+
+                  <div className="panel" style={{ padding: '14px', marginBottom: '24px' }}>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>
+                      Deployment Dates & Warranty
+                    </span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+                        <span style={{ color: 'var(--text-secondary)' }}>Installation Date</span>
+                        <strong style={{ color: 'white' }}>{activeInstall.install_date ? new Date(activeInstall.install_date).toLocaleDateString() : 'Unknown'}</strong>
+                      </div>
+                      {activeInstall.warranty_expiry && (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+                          <span style={{ color: 'var(--text-secondary)' }}>Warranty Expiration</span>
+                          <strong style={{ color: 'white' }}>{new Date(activeInstall.warranty_expiry).toLocaleDateString()}</strong>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {activeInstall.description && (
+                    <div className="panel" style={{ padding: '14px', marginBottom: '24px' }}>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '6px', textTransform: 'uppercase', fontWeight: '600' }}>Description</span>
+                      <p style={{ margin: 0, fontSize: '0.9rem', color: 'white', lineHeight: '1.4' }}>{activeInstall.description}</p>
+                    </div>
+                  )}
+
+                  {activeInstall.notes && (
+                    <div className="panel" style={{ padding: '14px', marginBottom: '24px' }}>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '6px', textTransform: 'uppercase', fontWeight: '600' }}>Engineering Notes</span>
+                      <p style={{ margin: 0, fontSize: '0.9rem', color: 'white', lineHeight: '1.4' }}>{activeInstall.notes}</p>
+                    </div>
+                  )}
+
+                  {activeInstall.document_url && (
+                    <div style={{ marginTop: '24px' }}>
+                      <a 
+                        href={activeInstall.document_url} 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="btn btn-primary" 
+                        style={{ width: '100%', padding: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', textDecoration: 'none', color: 'white', fontWeight: '600' }}
+                      >
+                        <BookOpen size={16} /> Open Reference Manual / Document
+                      </a>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
+                    <button className="btn btn-secondary" style={{ flexGrow: 1 }} onClick={() => { setShowEditInstall(true); setEditingInstall(activeInstall); }}>Edit Installation</button>
+                    <button className="btn btn-secondary" style={{ color: 'var(--accent-rose)' }} onClick={() => { if(confirm(`Delete installation of ${activeInstall.equipment_name} at ${activeInstall.site_name}?`)) { handleDeleteInstall(activeInstall.id, activeInstall.equipment_name); setActiveInstall(null); } }}>Delete</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Slide-out Drawer: Add Installation */}
+            {showAddInstall && (
+              <div className="drawer-backdrop" onClick={() => setShowAddInstall(false)}>
+                <div className="drawer" onClick={(e) => e.stopPropagation()}>
+                  <div className="drawer-header">
+                    <h2>Register Site Deployed Asset</h2>
+                    <button className="drawer-close" onClick={() => setShowAddInstall(false)}><X size={20} /></button>
+                  </div>
+
+                  <form onSubmit={handleCreateInstall}>
+                    <div className="form-group">
+                      <label className="form-label">Client Site / Location Name *</label>
+                      <input 
+                        type="text" 
+                        className="form-control" 
+                        required 
+                        placeholder="e.g. St James Hospital, Building 3"
+                        value={newInstall.site_name}
+                        onChange={(e) => setNewInstall({ ...newInstall, site_name: e.target.value })}
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label">Equipment / Asset Name *</label>
+                      <input 
+                        type="text" 
+                        className="form-control" 
+                        required 
+                        placeholder="e.g. Blustream HDMI Extender 1M"
+                        value={newInstall.equipment_name}
+                        onChange={(e) => setNewInstall({ ...newInstall, equipment_name: e.target.value })}
+                      />
+                    </div>
+
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label className="form-label">Model / Part Ref</label>
+                        <input 
+                          type="text" 
+                          className="form-control" 
+                          placeholder="e.g. BLU-HDMI-100"
+                          value={newInstall.model_number}
+                          onChange={(e) => setNewInstall({ ...newInstall, model_number: e.target.value })}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Serial Number</label>
+                        <input 
+                          type="text" 
+                          className="form-control" 
+                          placeholder="e.g. SN-87124A"
+                          value={newInstall.serial_number}
+                          onChange={(e) => setNewInstall({ ...newInstall, serial_number: e.target.value })}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label className="form-label">Install Date</label>
+                        <input 
+                          type="date" 
+                          className="form-control" 
+                          value={newInstall.install_date}
+                          onChange={(e) => setNewInstall({ ...newInstall, install_date: e.target.value })}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Warranty Expiry Date</label>
+                        <input 
+                          type="date" 
+                          className="form-control" 
+                          value={newInstall.warranty_expiry}
+                          onChange={(e) => setNewInstall({ ...newInstall, warranty_expiry: e.target.value })}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label">Documentation / Manual URL</label>
+                      <input 
+                        type="url" 
+                        className="form-control" 
+                        placeholder="e.g. https://www.blustream.co.uk/manual.pdf"
+                        value={newInstall.document_url}
+                        onChange={(e) => setNewInstall({ ...newInstall, document_url: e.target.value })}
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label">Operational Status</label>
+                      <select 
+                        className="form-control" 
+                        value={newInstall.status}
+                        onChange={(e) => setNewInstall({ ...newInstall, status: e.target.value })}
+                      >
+                        <option value="Active">Active / Installed</option>
+                        <option value="Maintenance">Under Maintenance</option>
+                        <option value="Retired">Retired / Decommissioned</option>
+                      </select>
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label">Extended Notes</label>
+                      <textarea 
+                        className="form-control" 
+                        placeholder="Specify mounting location, firmware versions, IP addresses, etc..."
+                        value={newInstall.notes}
+                        onChange={(e) => setNewInstall({ ...newInstall, notes: e.target.value })}
+                      />
+                    </div>
+
+                    <div style={{ marginTop: '24px', display: 'flex', gap: '12px' }}>
+                      <button type="submit" className="btn btn-primary" style={{ flexGrow: 1 }}>Save Deployed Asset</button>
+                      <button type="button" className="btn btn-secondary" onClick={() => setShowAddInstall(false)}>Cancel</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {/* Slide-out Drawer: Edit Installation */}
+            {showEditInstall && editingInstall && (
+              <div className="drawer-backdrop" onClick={() => { setShowEditInstall(false); setEditingInstall(null); }}>
+                <div className="drawer" onClick={(e) => e.stopPropagation()}>
+                  <div className="drawer-header">
+                    <h2>Edit Deployed Asset</h2>
+                    <button className="drawer-close" onClick={() => { setShowEditInstall(false); setEditingInstall(null); }}><X size={20} /></button>
+                  </div>
+
+                  <form onSubmit={handleUpdateInstall}>
+                    <div className="form-group">
+                      <label className="form-label">Client Site / Location Name *</label>
+                      <input 
+                        type="text" 
+                        className="form-control" 
+                        required 
+                        value={editingInstall.site_name}
+                        onChange={(e) => setEditingInstall({ ...editingInstall, site_name: e.target.value })}
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label">Equipment / Asset Name *</label>
+                      <input 
+                        type="text" 
+                        className="form-control" 
+                        required 
+                        value={editingInstall.equipment_name}
+                        onChange={(e) => setEditingInstall({ ...editingInstall, equipment_name: e.target.value })}
+                      />
+                    </div>
+
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label className="form-label">Model / Part Ref</label>
+                        <input 
+                          type="text" 
+                          className="form-control" 
+                          value={editingInstall.model_number || ''}
+                          onChange={(e) => setEditingInstall({ ...editingInstall, model_number: e.target.value })}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Serial Number</label>
+                        <input 
+                          type="text" 
+                          className="form-control" 
+                          value={editingInstall.serial_number || ''}
+                          onChange={(e) => setEditingInstall({ ...editingInstall, serial_number: e.target.value })}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label className="form-label">Install Date</label>
+                        <input 
+                          type="date" 
+                          className="form-control" 
+                          value={editingInstall.install_date ? editingInstall.install_date.split('T')[0] : ''}
+                          onChange={(e) => setEditingInstall({ ...editingInstall, install_date: e.target.value })}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Warranty Expiry Date</label>
+                        <input 
+                          type="date" 
+                          className="form-control" 
+                          value={editingInstall.warranty_expiry ? editingInstall.warranty_expiry.split('T')[0] : ''}
+                          onChange={(e) => setEditingInstall({ ...editingInstall, warranty_expiry: e.target.value })}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label">Documentation / Manual URL</label>
+                      <input 
+                        type="url" 
+                        className="form-control" 
+                        value={editingInstall.document_url || ''}
+                        onChange={(e) => setEditingInstall({ ...editingInstall, document_url: e.target.value })}
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label">Operational Status</label>
+                      <select 
+                        className="form-control" 
+                        value={editingInstall.status}
+                        onChange={(e) => setEditingInstall({ ...editingInstall, status: e.target.value })}
+                      >
+                        <option value="Active">Active / Installed</option>
+                        <option value="Maintenance">Under Maintenance</option>
+                        <option value="Retired">Retired / Decommissioned</option>
+                      </select>
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label">Extended Notes</label>
+                      <textarea 
+                        className="form-control" 
+                        value={editingInstall.notes || ''}
+                        onChange={(e) => setEditingInstall({ ...editingInstall, notes: e.target.value })}
+                      />
+                    </div>
+
+                    <div style={{ marginTop: '24px', display: 'flex', gap: '12px' }}>
+                      <button type="submit" className="btn btn-primary" style={{ flexGrow: 1 }}>Save Changes</button>
+                      <button type="button" className="btn btn-secondary" onClick={() => { setShowEditInstall(false); setEditingInstall(null); }}>Cancel</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {currentView === 'loans' && (
+          <div>
+            <div className="page-header">
+              <div className="page-title-group">
+                <h1>Temporary Tool Loans Manager</h1>
+                <p>Monitor high-value shared tools assigned to engineers. Highlight overdue loans and process returns.</p>
+              </div>
+            </div>
+
+            {/* Custom Premium Tabs */}
+            <div className="admin-tabs" style={{ display: 'flex', gap: '8px', borderBottom: '1px solid var(--border-color)', marginBottom: '24px' }}>
+              <button 
+                type="button"
+                className={`btn ${loansTab === 'active' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ padding: '8px 16px', fontSize: '0.85rem' }}
+                onClick={() => setLoansTab('active')}
+              >
+                Active Tool Loans ({loans.filter(l => !l.returned_at).length})
+              </button>
+              <button 
+                type="button"
+                className={`btn ${loansTab === 'history' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ padding: '8px 16px', fontSize: '0.85rem' }}
+                onClick={() => setLoansTab('history')}
+              >
+                Returned History ({loans.filter(l => l.returned_at).length})
+              </button>
+            </div>
+
+            <div className="panel">
+              <div className="table-container">
+                <table className="custom-table">
+                  <thead>
+                    <tr>
+                      <th>Tool Name</th>
+                      <th>Borrower</th>
+                      <th>Quantity</th>
+                      <th>Checkout Date</th>
+                      <th>Due Date</th>
+                      {loansTab === 'history' ? <th>Returned Date</th> : <th>Overdue Status</th>}
+                      {loansTab === 'active' && <th style={{ textAlign: 'right' }}>Actions</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loans
+                      .filter(l => loansTab === 'active' ? !l.returned_at : !!l.returned_at)
+                      .map(loan => {
+                        const now = new Date();
+                        const dueDate = new Date(loan.due_date);
+                        const isOverdue = !loan.returned_at && dueDate < now;
+                        
+                        return (
+                          <tr key={loan.id} style={{ 
+                            borderLeft: isOverdue ? '3px solid var(--accent-rose)' : 'none',
+                            background: isOverdue ? 'rgba(244, 63, 94, 0.03)' : 'transparent'
+                          }}>
+                            <td style={{ fontWeight: '600', color: 'white' }}>{loan.asset_name}</td>
+                            <td>
+                              <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <div style={{ width: '24px', height: '24px', borderRadius: '50%', backgroundColor: 'var(--accent-indigo)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 'bold', color: 'white' }}>
+                                  {loan.borrower.substring(0, 2).toUpperCase()}
+                                </div>
+                                {loan.borrower}
+                              </span>
+                            </td>
+                            <td style={{ fontWeight: '600' }}>{loan.quantity}</td>
+                            <td>{new Date(loan.checkout_date).toLocaleDateString()}</td>
+                            <td>
+                              <span style={{ color: isOverdue ? 'var(--accent-rose)' : 'inherit', fontWeight: isOverdue ? 'bold' : 'normal' }}>
+                                {new Date(loan.due_date).toLocaleDateString()}
+                              </span>
+                            </td>
+                            {loansTab === 'history' ? (
+                              <td>{new Date(loan.returned_at).toLocaleString()}</td>
+                            ) : (
+                              <td>
+                                {isOverdue ? (
+                                  <span className="badge badge-danger" style={{ 
+                                    animation: 'pulse 2s infinite',
+                                    boxShadow: '0 0 8px rgba(244, 63, 94, 0.4)'
+                                  }}>
+                                    OVERDUE
+                                  </span>
+                                ) : (
+                                  <span className="badge badge-info">On Schedule</span>
+                                )}
+                              </td>
+                            )}
+                            {loansTab === 'active' && (
+                              <td style={{ textAlign: 'right' }}>
+                                <button 
+                                  className="btn btn-success btn-sm"
+                                  style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+                                  onClick={() => {
+                                    if (confirm(`Restock and return ${loan.quantity}x ${loan.asset_name} from ${loan.borrower}?`)) {
+                                      handleReturnLoan(loan.id);
+                                    }
+                                  }}
+                                >
+                                  Return & Restock
+                                </button>
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })}
+                    {loans.filter(l => loansTab === 'active' ? !l.returned_at : !!l.returned_at).length === 0 && (
+                      <tr>
+                        <td colSpan="7" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>
+                          No tool loans found in this tab view.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {currentView === 'shopping-list' && (
+          <div>
+            <div className="page-header">
+              <div className="page-title-group">
+                <h1>Material Shopping List & Purchase Requisitions</h1>
+                <p>Automatic supplier group reorder requisition list calculated from inventory thresholds.</p>
+              </div>
+              <div className="header-actions">
+                <button className="btn btn-success" onClick={handleExportShoppingListPDF}>
+                  <Printer size={16} /> Export Printable PDF
+                </button>
+              </div>
+            </div>
+
+            {(() => {
+              const lowStockItems = assets.filter(a => a.quantity <= a.min_quantity);
+              
+              const groupedBySupplier = {};
+              lowStockItems.forEach(item => {
+                const supplier = item.supplier_name || 'Unassigned Supplier';
+                if (!groupedBySupplier[supplier]) {
+                  groupedBySupplier[supplier] = [];
+                }
+                groupedBySupplier[supplier].push(item);
+              });
+
+              const supplierNames = Object.keys(groupedBySupplier).sort();
+
+              if (lowStockItems.length === 0) {
+                return (
+                  <div className="panel" style={{ textAlign: 'center', padding: '60px' }}>
+                    <ShoppingCart size={48} style={{ color: 'var(--text-muted)', marginBottom: '16px' }} />
+                    <h3>Reorder List is Empty</h3>
+                    <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>All standard parts in your inventory are currently above their warning levels.</p>
+                    <button className="btn btn-primary" onClick={() => setCurrentView('assets')}>Go to Material Directory</button>
+                  </div>
+                );
+              }
+
+              let grandTotalCost = 0;
+              let totalUniqueItems = 0;
+
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                  {supplierNames.map(supplier => {
+                    const items = groupedBySupplier[supplier];
+                    let supplierCost = 0;
+
+                    return (
+                      <div className="panel" key={supplier} style={{ borderLeft: '3px solid var(--accent-indigo)' }}>
+                        <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px', marginBottom: '16px' }}>
+                          <h3 style={{ margin: 0, fontSize: '1.2rem', color: 'white' }}>{supplier}</h3>
+                          <span className="badge badge-info">{items.length} items to reorder</span>
+                        </div>
+
+                        <div className="table-container" style={{ marginBottom: '16px' }}>
+                          <table className="custom-table">
+                            <thead>
+                              <tr>
+                                <th>Item Name</th>
+                                <th>SKU / Model</th>
+                                <th style={{ textAlign: 'center' }}>In Stock</th>
+                                <th style={{ textAlign: 'center' }}>Min Warn Level</th>
+                                <th style={{ textAlign: 'center' }}>Suggested Reorder Qty</th>
+                                <th style={{ textAlign: 'right' }}>Est. Unit Cost</th>
+                                <th style={{ textAlign: 'right' }}>Est. Total Cost</th>
+                                <th style={{ textAlign: 'right' }}>Ordering Link</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {items.map(item => {
+                                totalUniqueItems++;
+                                const currentQty = item.quantity;
+                                const minQty = item.min_quantity;
+                                const reorderQty = Math.max(1, minQty - currentQty + 1);
+                                const unitPrice = item.purchase_price || 0;
+                                const lineCost = reorderQty * unitPrice;
+                                supplierCost += lineCost;
+                                grandTotalCost += lineCost;
+
+                                return (
+                                  <tr key={item.id}>
+                                    <td style={{ fontWeight: '600', color: 'white' }}>{item.name}</td>
+                                    <td style={{ fontFamily: 'monospace' }}>{item.sku || '—'}</td>
+                                    <td style={{ textAlign: 'center', color: 'var(--accent-rose)', fontWeight: 'bold' }}>{currentQty} {item.unit}</td>
+                                    <td style={{ textAlign: 'center' }}>{minQty} {item.unit}</td>
+                                    <td style={{ textAlign: 'center', fontWeight: 'bold' }}>{reorderQty} {item.unit}</td>
+                                    <td style={{ textAlign: 'right' }}>£{unitPrice.toFixed(2)}</td>
+                                    <td style={{ textAlign: 'right', fontWeight: 'bold', color: 'white' }}>£{lineCost.toFixed(2)}</td>
+                                    <td style={{ textAlign: 'right' }}>
+                                      {item.supplier_url ? (
+                                        <a 
+                                          href={item.supplier_url} 
+                                          target="_blank" 
+                                          rel="noopener noreferrer" 
+                                          className="btn btn-secondary btn-sm"
+                                          style={{ padding: '4px 10px', fontSize: '0.75rem', gap: '4px', display: 'inline-flex', alignItems: 'center', textDecoration: 'none', color: 'var(--accent-cyan)' }}
+                                        >
+                                          <ExternalLink size={12} /> Buy Now
+                                        </a>
+                                      ) : (
+                                        <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>—</span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', fontSize: '0.95rem', fontWeight: 'bold', color: 'white' }}>
+                          <span>Supplier Estimated Subtotal: <strong style={{ color: 'var(--accent-cyan)', marginLeft: '6px' }}>£{supplierCost.toFixed(2)}</strong></span>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* Summary aggregate widget */}
+                  <div className="panel" style={{ background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(20, 184, 166, 0.1))', border: '1px solid rgba(255,255,255,0.08)' }}>
+                    <h3 style={{ margin: '0 0 16px 0', fontSize: '1.25rem', color: 'white' }}>Purchase Summary & Requisitions</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+                      <div className="panel" style={{ margin: 0, padding: '14px' }}>
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Total Unique Reorder Lines</span>
+                        <p style={{ fontSize: '1.5rem', fontWeight: 'bold', margin: '4px 0 0 0' }}>{totalUniqueItems}</p>
+                      </div>
+                      <div className="panel" style={{ margin: 0, padding: '14px' }}>
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Suppliers Involved</span>
+                        <p style={{ fontSize: '1.5rem', fontWeight: 'bold', margin: '4px 0 0 0' }}>{supplierNames.length}</p>
+                      </div>
+                      <div className="panel" style={{ margin: 0, padding: '14px' }}>
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Estimated Grand Total Cost</span>
+                        <p style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'var(--accent-cyan)', margin: '4px 0 0 0' }}>£{grandTotalCost.toFixed(2)}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
         {/* Form Drawer Modal: Change Password */}
@@ -5611,6 +7045,55 @@ function App() {
                     ))}
                   </select>
                 </div>
+
+                {txType === 'CHECK_OUT' && (
+                  <div className="form-group" style={{ marginTop: '12px', padding: '12px', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '6px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none', margin: 0 }}>
+                      <input 
+                        type="checkbox" 
+                        checked={isLoan} 
+                        onChange={(e) => {
+                          setIsLoan(e.target.checked);
+                          if (e.target.checked) {
+                            setLoanUser(txUser || (users[0]?.name || ''));
+                            const nextWeek = new Date();
+                            nextWeek.setDate(nextWeek.getDate() + 7);
+                            setLoanDueDate(nextWeek.toISOString().split('T')[0]);
+                          }
+                        }} 
+                      />
+                      <span style={{ fontSize: '0.85rem', color: 'white', fontWeight: '500' }}>Check out as Temporary Tool Loan?</span>
+                    </label>
+                    {isLoan && (
+                      <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        <div>
+                          <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: '4px' }}>Borrower / Team Member</label>
+                          <select 
+                            className="form-control" 
+                            style={{ padding: '6px 8px', fontSize: '0.8rem' }}
+                            value={loanUser}
+                            onChange={(e) => setLoanUser(e.target.value)}
+                          >
+                            {users.map(u => (
+                              <option key={u.id} value={u.name}>{u.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: '4px' }}>Due Date</label>
+                          <input 
+                            type="date" 
+                            className="form-control" 
+                            style={{ padding: '6px 8px', fontSize: '0.8rem' }}
+                            value={loanDueDate}
+                            onChange={(e) => setLoanDueDate(e.target.value)}
+                            required
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div className="form-group">
                   <label className="form-label" style={{ fontSize: '0.75rem' }}>Operation Notes</label>

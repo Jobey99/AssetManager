@@ -1140,6 +1140,211 @@ app.get('/api/admin/export-csv', async (req, res) => {
 });
 
 // ----------------------------------------------------
+// 5. Site Installations Endpoints
+// ----------------------------------------------------
+
+app.get('/api/site-installations', async (req, res) => {
+  try {
+    const installs = await dbAll('SELECT * FROM site_installations ORDER BY site_name ASC, equipment_name ASC');
+    res.json(installs);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/site-installations', async (req, res) => {
+  try {
+    const { site_name, equipment_name, description, model_number, serial_number, install_date, warranty_expiry, status, document_url, notes } = req.body;
+    if (!site_name || !equipment_name) {
+      return res.status(400).json({ error: 'site_name and equipment_name are required' });
+    }
+    const id = 'inst-' + crypto.randomBytes(4).toString('hex');
+    await dbRun(`
+      INSERT INTO site_installations (id, site_name, equipment_name, description, model_number, serial_number, install_date, warranty_expiry, status, document_url, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      id,
+      site_name,
+      equipment_name,
+      description || '',
+      model_number || '',
+      serial_number || '',
+      install_date || null,
+      warranty_expiry || null,
+      status || 'Active',
+      document_url || '',
+      notes || ''
+    ]);
+    const newInstall = await dbGet('SELECT * FROM site_installations WHERE id = ?', [id]);
+    res.status(201).json(newInstall);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/site-installations/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { site_name, equipment_name, description, model_number, serial_number, install_date, warranty_expiry, status, document_url, notes } = req.body;
+    
+    const current = await dbGet('SELECT * FROM site_installations WHERE id = ?', [id]);
+    if (!current) {
+      return res.status(404).json({ error: 'Site installation not found' });
+    }
+    await dbRun(`
+      UPDATE site_installations
+      SET site_name = ?, equipment_name = ?, description = ?, model_number = ?, serial_number = ?, 
+          install_date = ?, warranty_expiry = ?, status = ?, document_url = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `, [
+      site_name || current.site_name,
+      equipment_name || current.equipment_name,
+      description !== undefined ? description : current.description,
+      model_number !== undefined ? model_number : current.model_number,
+      serial_number !== undefined ? serial_number : current.serial_number,
+      install_date !== undefined ? install_date : current.install_date,
+      warranty_expiry !== undefined ? warranty_expiry : current.warranty_expiry,
+      status || current.status,
+      document_url !== undefined ? document_url : current.document_url,
+      notes !== undefined ? notes : current.notes,
+      id
+    ]);
+    const updated = await dbGet('SELECT * FROM site_installations WHERE id = ?', [id]);
+    res.json(updated);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/site-installations/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const current = await dbGet('SELECT * FROM site_installations WHERE id = ?', [id]);
+    if (!current) {
+      return res.status(404).json({ error: 'Site installation not found' });
+    }
+    await dbRun('DELETE FROM site_installations WHERE id = ?', [id]);
+    res.json({ message: 'Site installation deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ----------------------------------------------------
+// 6. Tool Loans Endpoints
+// ----------------------------------------------------
+
+app.get('/api/loans', async (req, res) => {
+  try {
+    const loans = await dbAll(`
+      SELECT loans.*, assets.name as asset_name, assets.sku as asset_sku, locations.name as location_name
+      FROM loans
+      LEFT JOIN assets ON loans.asset_id = assets.id
+      LEFT JOIN locations ON loans.location_id = locations.id
+      ORDER BY loans.created_at DESC
+    `);
+    res.json(loans);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/loans', async (req, res) => {
+  try {
+    const { asset_id, user_name, quantity, location_id, due_date, notes } = req.body;
+    if (!asset_id || !user_name || !due_date) {
+      return res.status(400).json({ error: 'asset_id, user_name, and due_date are required' });
+    }
+    const asset = await dbGet('SELECT * FROM assets WHERE id = ?', [asset_id]);
+    if (!asset) {
+      return res.status(404).json({ error: 'Asset not found' });
+    }
+    const qtyToLoan = parseInt(quantity, 10) || 1;
+    if (asset.quantity < qtyToLoan) {
+      return res.status(400).json({ error: `Insufficient stock to loan. Current stock is ${asset.quantity} ${asset.unit}.` });
+    }
+    // 1. Deduct stock from asset
+    const newQty = asset.quantity - qtyToLoan;
+    const newStatus = calculateStatus(newQty, asset.min_quantity);
+    await dbRun('UPDATE assets SET quantity = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [newQty, newStatus, asset_id]);
+    
+    // 2. Log transaction
+    await dbRun(`
+      INSERT INTO transactions (asset_id, type, quantity_change, location_id, user_name, notes)
+      VALUES (?, 'CHECK_OUT', ?, ?, ?, ?)
+    `, [
+      asset_id,
+      -qtyToLoan,
+      location_id || asset.location_id || null,
+      user_name,
+      notes ? `${notes} (Tool Loaned until ${due_date})` : `Tool Loaned until ${due_date}`
+    ]);
+
+    // 3. Create Loan entry
+    const result = await dbRun(`
+      INSERT INTO loans (asset_id, user_name, quantity, location_id, due_date, notes, status)
+      VALUES (?, ?, ?, ?, ?, ?, 'Active')
+    `, [
+      asset_id,
+      user_name,
+      qtyToLoan,
+      location_id || asset.location_id || null,
+      due_date,
+      notes || ''
+    ]);
+
+    const newLoan = await dbGet('SELECT * FROM loans WHERE id = ?', [result.id]);
+    res.status(201).json(newLoan);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/loans/:id/return', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const loan = await dbGet('SELECT * FROM loans WHERE id = ?', [id]);
+    if (!loan) {
+      return res.status(404).json({ error: 'Loan record not found' });
+    }
+    if (loan.status === 'Returned') {
+      return res.status(400).json({ error: 'Loan is already marked returned' });
+    }
+
+    // 1. Update loan status
+    await dbRun(`
+      UPDATE loans
+      SET status = 'Returned', returned_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `, [id]);
+
+    // 2. Add stock back to asset
+    const asset = await dbGet('SELECT * FROM assets WHERE id = ?', [loan.asset_id]);
+    if (asset) {
+      const newQty = asset.quantity + loan.quantity;
+      const newStatus = calculateStatus(newQty, asset.min_quantity);
+      await dbRun('UPDATE assets SET quantity = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [newQty, newStatus, loan.asset_id]);
+      
+      // 3. Log transaction
+      await dbRun(`
+        INSERT INTO transactions (asset_id, type, quantity_change, location_id, user_name, notes)
+        VALUES (?, 'CHECK_IN', ?, ?, 'System', ?)
+      `, [
+        loan.asset_id,
+        loan.quantity,
+        loan.location_id,
+        `Loan returned by ${loan.user_name}`
+      ]);
+    }
+
+    const updated = await dbGet('SELECT * FROM loans WHERE id = ?', [id]);
+    res.json(updated);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ----------------------------------------------------
 // FRONTEND ROUTE CALLBACK (Single Page App Fallback)
 // ----------------------------------------------------
 app.get('*', (req, res) => {

@@ -135,6 +135,39 @@ async function initDatabase() {
       )
     `);
 
+    await dbRun(`
+      CREATE TABLE IF NOT EXISTS site_installations (
+        id TEXT PRIMARY KEY,
+        site_name TEXT NOT NULL,
+        equipment_name TEXT NOT NULL,
+        description TEXT,
+        model_number TEXT,
+        serial_number TEXT,
+        install_date TEXT,
+        warranty_expiry TEXT,
+        status TEXT DEFAULT 'Active',
+        document_url TEXT,
+        notes TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    await dbRun(`
+      CREATE TABLE IF NOT EXISTS loans (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        asset_id TEXT REFERENCES assets(id) ON DELETE CASCADE,
+        user_name TEXT NOT NULL,
+        quantity INTEGER NOT NULL DEFAULT 1,
+        location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
+        due_date TEXT NOT NULL,
+        status TEXT CHECK(status IN ('Active', 'Returned')) DEFAULT 'Active',
+        notes TEXT,
+        returned_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
     // Migration: Add password columns if they don't exist on pre-existing users tables
     try {
       await dbRun('ALTER TABLE users ADD COLUMN password_hash TEXT');
