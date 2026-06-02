@@ -1498,6 +1498,7 @@ function App() {
       });
       const data = await res.json();
       if (res.ok) {
+        fetchAssets();
         setAssets(assets.map(a => a.id === editingAsset.id ? { ...a, ...data } : a));
         if (activeAsset && activeAsset.id === editingAsset.id) {
           setActiveAsset({ ...activeAsset, ...data });
