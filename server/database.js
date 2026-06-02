@@ -106,6 +106,7 @@ async function initDatabase() {
         purchase_price REAL DEFAULT 0.0,
         supplier_name TEXT,
         supplier_url TEXT,
+        is_tracked INTEGER DEFAULT 1,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
@@ -351,6 +352,13 @@ async function initDatabase() {
     try {
       await dbRun("ALTER TABLE assets ADD COLUMN supplier_url TEXT");
       console.log("Added supplier_url column to assets table.");
+    } catch (e) {
+      // Column might already exist
+    }
+
+    try {
+      await dbRun("ALTER TABLE assets ADD COLUMN is_tracked INTEGER DEFAULT 1");
+      console.log("Added is_tracked column to assets table.");
     } catch (e) {
       // Column might already exist
     }

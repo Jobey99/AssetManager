@@ -261,7 +261,7 @@ function App() {
   const [isSyncing, setIsSyncing] = useState(false);
 
   // Form inputs
-  const [newAsset, setNewAsset] = useState({ id: '', name: '', description: '', sku: '', quantity: 0, unit: 'pcs', location_id: '', min_quantity: 0, category: 'Uncategorized', serial_number: '', warranty_expiry: '', purchase_price: 0.0, supplier_name: '', supplier_url: '' });
+  const [newAsset, setNewAsset] = useState({ id: '', name: '', description: '', sku: '', quantity: 0, unit: 'pcs', location_id: '', min_quantity: 0, category: 'Uncategorized', serial_number: '', warranty_expiry: '', purchase_price: 0.0, supplier_name: '', supplier_url: '', is_tracked: 1 });
   const [newLocation, setNewLocation] = useState({ name: '', description: '' });
   const [newCategory, setNewCategory] = useState({ name: '', description: '' });
   const [newUser, setNewUser] = useState({ name: '', role: 'Engineer', password: '' });
@@ -1470,7 +1470,8 @@ function App() {
   };
 
   // Helper to calculate status in offline updates
-  const calculateStatus = (qty, minQty) => {
+  const calculateStatus = (qty, minQty, isTracked = 1) => {
+    if (isTracked === 0 || isTracked === '0' || isTracked === false) return 'Untracked';
     if (qty <= 0) return 'Out of Stock';
     if (minQty && qty <= minQty) return 'Low Stock';
     return 'Available';
@@ -1680,7 +1681,7 @@ function App() {
       if (res.ok) {
         setAssets([data, ...assets]);
         setShowAddAsset(false);
-        setNewAsset({ id: '', name: '', description: '', sku: '', quantity: 0, unit: 'pcs', location_id: '', min_quantity: 0, category: 'Uncategorized', serial_number: '', warranty_expiry: '', purchase_price: 0.0, supplier_name: '', supplier_url: '' });
+        setNewAsset({ id: '', name: '', description: '', sku: '', quantity: 0, unit: 'pcs', location_id: '', min_quantity: 0, category: 'Uncategorized', serial_number: '', warranty_expiry: '', purchase_price: 0.0, supplier_name: '', supplier_url: '', is_tracked: 1 });
         alert(`Asset '${data.name}' created successfully!`);
         fetchTransactions();
       } else {
@@ -3789,7 +3790,8 @@ function App() {
                               <td>
                                 <span className={`badge ${
                                   a.status === 'Available' ? 'badge-success' : 
-                                  a.status === 'Low Stock' ? 'badge-warning' : 'badge-danger'
+                                  a.status === 'Low Stock' ? 'badge-warning' : 
+                                  a.status === 'Untracked' ? 'badge-secondary' : 'badge-danger'
                                 }`}>
                                   {a.status}
                                 </span>
@@ -3860,7 +3862,8 @@ function App() {
                                 <td>
                                   <span className={`badge ${
                                     a.status === 'Available' ? 'badge-success' : 
-                                    a.status === 'Low Stock' ? 'badge-warning' : 'badge-danger'
+                                    a.status === 'Low Stock' ? 'badge-warning' : 
+                                    a.status === 'Untracked' ? 'badge-secondary' : 'badge-danger'
                                   }`}>
                                     {a.status}
                                   </span>
@@ -3904,7 +3907,7 @@ function App() {
                                                 <td style={{ padding: '8px 12px', fontSize: '0.8rem' }}>{item.location_name || 'Unassigned'}</td>
                                                 <td style={{ padding: '8px 12px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Min: {item.min_quantity}</td>
                                                 <td style={{ padding: '8px 12px', fontSize: '0.8rem' }}>
-                                                  <span className={`badge ${item.status === 'Available' ? 'badge-success' : item.status === 'Low Stock' ? 'badge-warning' : 'badge-danger'}`} style={{ fontSize: '0.7rem', padding: '2px 6px' }}>
+                                                  <span className={`badge ${item.status === 'Available' ? 'badge-success' : item.status === 'Low Stock' ? 'badge-warning' : item.status === 'Untracked' ? 'badge-secondary' : item.status === 'Out of Stock' ? 'badge-danger' : 'badge-danger'}`} style={{ fontSize: '0.7rem', padding: '2px 6px' }}>
                                                     {item.status}
                                                   </span>
                                                 </td>
@@ -3977,7 +3980,8 @@ function App() {
                           </div>
                           <span className={`badge ${
                             a.status === 'Available' ? 'badge-success' : 
-                            a.status === 'Low Stock' ? 'badge-warning' : 'badge-danger'
+                            a.status === 'Low Stock' ? 'badge-warning' : 
+                            a.status === 'Untracked' ? 'badge-secondary' : 'badge-danger'
                           }`}>
                             {a.status}
                           </span>
@@ -4068,7 +4072,8 @@ function App() {
                           </div>
                           <span className={`badge ${
                             a.status === 'Available' ? 'badge-success' : 
-                            a.status === 'Low Stock' ? 'badge-warning' : 'badge-danger'
+                            a.status === 'Low Stock' ? 'badge-warning' : 
+                            a.status === 'Untracked' ? 'badge-secondary' : 'badge-danger'
                           }`}>
                             {a.status}
                           </span>
@@ -4098,7 +4103,7 @@ function App() {
                                     <span style={{ fontWeight: '600', color: 'white', fontSize: '0.85rem' }}>
                                       {item.location_name || 'Unassigned'}
                                     </span>
-                                    <span className={`badge ${item.status === 'Available' ? 'badge-success' : item.status === 'Low Stock' ? 'badge-warning' : 'badge-danger'}`} style={{ fontSize: '0.7rem', padding: '1px 4px' }}>
+                                    <span className={`badge ${item.status === 'Available' ? 'badge-success' : item.status === 'Low Stock' ? 'badge-warning' : item.status === 'Untracked' ? 'badge-secondary' : item.status === 'Out of Stock' ? 'badge-danger' : 'badge-danger'}`} style={{ fontSize: '0.7rem', padding: '1px 4px' }}>
                                       {item.status}
                                     </span>
                                   </div>
@@ -4351,6 +4356,19 @@ function App() {
                             />
                           </div>
                         </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '12px' }}>
+                          <input 
+                            type="checkbox"
+                            id="add-asset-is-tracked"
+                            checked={newAsset.is_tracked !== 0}
+                            onChange={(e) => setNewAsset({ ...newAsset, is_tracked: e.target.checked ? 1 : 0 })}
+                            style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                          />
+                          <label htmlFor="add-asset-is-tracked" style={{ fontSize: '0.85rem', color: 'white', cursor: 'pointer', userSelect: 'none' }}>
+                            Enable Stock Level Monitoring & Low Stock Warnings
+                          </label>
+                        </div>
                       </div>
                     </details>
 
@@ -4551,6 +4569,19 @@ function App() {
                               onChange={(e) => setEditingAsset({ ...editingAsset, supplier_url: e.target.value })}
                             />
                           </div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '12px' }}>
+                          <input 
+                            type="checkbox"
+                            id="edit-asset-is-tracked"
+                            checked={editingAsset.is_tracked !== 0}
+                            onChange={(e) => setEditingAsset({ ...editingAsset, is_tracked: e.target.checked ? 1 : 0 })}
+                            style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                          />
+                          <label htmlFor="edit-asset-is-tracked" style={{ fontSize: '0.85rem', color: 'white', cursor: 'pointer', userSelect: 'none' }}>
+                            Enable Stock Level Monitoring & Low Stock Warnings
+                          </label>
                         </div>
                       </div>
                     </details>
@@ -6574,7 +6605,7 @@ function App() {
             </div>
 
             {(() => {
-              const lowStockItems = assets.filter(a => a.quantity <= a.min_quantity);
+              const lowStockItems = assets.filter(a => a.is_tracked !== 0 && a.quantity <= a.min_quantity);
               
               const groupedBySupplier = {};
               lowStockItems.forEach(item => {

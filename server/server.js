@@ -77,7 +77,8 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, '../frontend/dist')));
 
 // Helper to determine asset status based on quantities
-function calculateStatus(quantity, minQuantity) {
+function calculateStatus(quantity, minQuantity, isTracked = 1) {
+  if (isTracked === 0 || isTracked === '0' || isTracked === false) return 'Untracked';
   if (quantity <= 0) return 'Out of Stock';
   if (quantity <= minQuantity) return 'Low Stock';
   return 'Available';
@@ -162,7 +163,7 @@ app.get('/api/assets/:id', async (req, res) => {
 // POST /api/assets - Create a new asset
 app.post('/api/assets', async (req, res) => {
   try {
-    let { id, name, description, sku, quantity, unit, location_id, min_quantity, category, serial_number, warranty_expiry, purchase_price, supplier_name, supplier_url } = req.body;
+    let { id, name, description, sku, quantity, unit, location_id, min_quantity, category, serial_number, warranty_expiry, purchase_price, supplier_name, supplier_url, is_tracked } = req.body;
 
     if (!name) {
       return res.status(400).json({ error: 'Asset name is required' });
@@ -181,11 +182,12 @@ app.post('/api/assets', async (req, res) => {
 
     quantity = parseInt(quantity, 10) || 0;
     min_quantity = parseInt(min_quantity, 10) || 0;
-    const status = calculateStatus(quantity, min_quantity);
+    const isTrackedVal = is_tracked !== undefined ? (is_tracked ? 1 : 0) : 1;
+    const status = calculateStatus(quantity, min_quantity, isTrackedVal);
 
     await dbRun(`
-      INSERT INTO assets (id, name, description, sku, quantity, unit, location_id, status, min_quantity, category, serial_number, warranty_expiry, purchase_price, supplier_name, supplier_url)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO assets (id, name, description, sku, quantity, unit, location_id, status, min_quantity, category, serial_number, warranty_expiry, purchase_price, supplier_name, supplier_url, is_tracked)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       id, 
       name, 
@@ -201,7 +203,8 @@ app.post('/api/assets', async (req, res) => {
       warranty_expiry || null,
       parseFloat(purchase_price) || 0.0,
       supplier_name || null,
-      supplier_url || null
+      supplier_url || null,
+      isTrackedVal
     ]);
 
     // Record initial transaction
@@ -223,15 +226,16 @@ app.post('/api/assets', async (req, res) => {
 app.put('/api/assets/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, sku, unit, location_id, min_quantity, category, serial_number, warranty_expiry, purchase_price, supplier_name, supplier_url } = req.body;
+    const { name, description, sku, unit, location_id, min_quantity, category, serial_number, warranty_expiry, purchase_price, supplier_name, supplier_url, is_tracked } = req.body;
 
     const currentAsset = await dbGet('SELECT * FROM assets WHERE id = ?', [id]);
     if (!currentAsset) {
       return res.status(404).json({ error: 'Asset not found' });
     }
 
+    const isTrackedVal = is_tracked !== undefined ? (is_tracked ? 1 : 0) : currentAsset.is_tracked;
     const minQtyVal = min_quantity !== undefined ? parseInt(min_quantity, 10) : currentAsset.min_quantity;
-    const newStatus = calculateStatus(currentAsset.quantity, minQtyVal);
+    const newStatus = calculateStatus(currentAsset.quantity, minQtyVal, isTrackedVal);
 
     const finalName = name || currentAsset.name;
     const finalSku = sku !== undefined ? sku : currentAsset.sku;
@@ -239,7 +243,7 @@ app.put('/api/assets/:id', async (req, res) => {
     await dbRun(`
       UPDATE assets 
       SET name = ?, description = ?, sku = ?, unit = ?, location_id = ?, min_quantity = ?, status = ?, category = ?, 
-          serial_number = ?, warranty_expiry = ?, purchase_price = ?, supplier_name = ?, supplier_url = ?, updated_at = CURRENT_TIMESTAMP
+          serial_number = ?, warranty_expiry = ?, purchase_price = ?, supplier_name = ?, supplier_url = ?, is_tracked = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `, [
       finalName,
@@ -255,12 +259,13 @@ app.put('/api/assets/:id', async (req, res) => {
       purchase_price !== undefined ? parseFloat(purchase_price) || 0.0 : currentAsset.purchase_price,
       supplier_name !== undefined ? supplier_name : currentAsset.supplier_name,
       supplier_url !== undefined ? supplier_url : currentAsset.supplier_url,
+      isTrackedVal,
       id
     ]);
 
     // Sync product-level metadata to all other assets sharing the same old name or SKU
     try {
-      let syncQuery = 'SELECT id, quantity FROM assets WHERE id != ? AND (name = ? COLLATE NOCASE';
+      let syncQuery = 'SELECT id, quantity, is_tracked FROM assets WHERE id != ? AND (name = ? COLLATE NOCASE';
       let syncParams = [id, currentAsset.name];
       if (currentAsset.sku && currentAsset.sku.trim() !== '') {
         syncQuery += ' OR sku = ? COLLATE NOCASE';
@@ -270,11 +275,12 @@ app.put('/api/assets/:id', async (req, res) => {
 
       const siblings = await dbAll(syncQuery, syncParams);
       for (const sibling of siblings) {
-        const siblingStatus = calculateStatus(sibling.quantity, minQtyVal);
+        const siblingTracked = is_tracked !== undefined ? (is_tracked ? 1 : 0) : sibling.is_tracked;
+        const siblingStatus = calculateStatus(sibling.quantity, minQtyVal, siblingTracked);
         await dbRun(`
           UPDATE assets 
           SET name = ?, description = ?, sku = ?, unit = ?, min_quantity = ?, status = ?, category = ?, 
-              purchase_price = ?, supplier_name = ?, supplier_url = ?, updated_at = CURRENT_TIMESTAMP
+              purchase_price = ?, supplier_name = ?, supplier_url = ?, is_tracked = ?, updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
         `, [
           finalName,
@@ -287,6 +293,7 @@ app.put('/api/assets/:id', async (req, res) => {
           purchase_price !== undefined ? parseFloat(purchase_price) || 0.0 : currentAsset.purchase_price,
           supplier_name !== undefined ? supplier_name : currentAsset.supplier_name,
           supplier_url !== undefined ? supplier_url : currentAsset.supplier_url,
+          siblingTracked,
           sibling.id
         ]);
       }
@@ -492,7 +499,7 @@ app.post('/api/transactions', async (req, res) => {
     if (isTransfer) {
       // 1. Subtract changeVal from source asset
       const newSourceQty = asset.quantity - Math.abs(changeVal);
-      const sourceStatus = calculateStatus(newSourceQty, asset.min_quantity);
+      const sourceStatus = calculateStatus(newSourceQty, asset.min_quantity, asset.is_tracked);
 
       // Find location names for audit logging
       const sourceLocRow = await dbGet('SELECT name FROM locations WHERE id = ?', [asset.location_id]);
@@ -526,7 +533,7 @@ app.post('/api/transactions', async (req, res) => {
 
       if (destAsset) {
         const newDestQty = destAsset.quantity + Math.abs(changeVal);
-        const destStatus = calculateStatus(newDestQty, destAsset.min_quantity);
+        const destStatus = calculateStatus(newDestQty, destAsset.min_quantity, destAsset.is_tracked);
         await dbRun(
           'UPDATE assets SET quantity = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
           [newDestQty, destStatus, destAsset.id]
@@ -545,10 +552,10 @@ app.post('/api/transactions', async (req, res) => {
         // Create new asset record at the destination copying all fields
         const newAssetId = 'qr-' + crypto.randomBytes(4).toString('hex');
         const initialDestQty = Math.abs(changeVal);
-        const destStatus = calculateStatus(initialDestQty, asset.min_quantity);
+        const destStatus = calculateStatus(initialDestQty, asset.min_quantity, asset.is_tracked);
         await dbRun(`
-          INSERT INTO assets (id, name, description, sku, quantity, unit, location_id, status, min_quantity, category, serial_number, warranty_expiry, purchase_price, supplier_name, supplier_url)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO assets (id, name, description, sku, quantity, unit, location_id, status, min_quantity, category, serial_number, warranty_expiry, purchase_price, supplier_name, supplier_url, is_tracked)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `, [
           newAssetId,
           asset.name,
@@ -564,7 +571,8 @@ app.post('/api/transactions', async (req, res) => {
           asset.warranty_expiry || null,
           asset.purchase_price || 0.0,
           asset.supplier_name || null,
-          asset.supplier_url || null
+          asset.supplier_url || null,
+          asset.is_tracked
         ]);
         await dbRun(`
           INSERT INTO transactions (asset_id, type, quantity_change, location_id, user_name, notes)
@@ -588,7 +596,7 @@ app.post('/api/transactions', async (req, res) => {
       return res.json(updatedAsset);
     }
 
-    const status = calculateStatus(newQuantity, asset.min_quantity);
+    const status = calculateStatus(newQuantity, asset.min_quantity, asset.is_tracked);
     const destLocation = location_id || asset.location_id;
 
     // Begin updates
@@ -763,7 +771,7 @@ app.post('/api/admin/seed-activity', async (req, res) => {
       // Update asset quantity
       const currentQty = randAsset.quantity || 0;
       const newQty = Math.max(0, currentQty + change);
-      const status = calculateStatus(newQty, randAsset.min_quantity || 0);
+      const status = calculateStatus(newQty, randAsset.min_quantity || 0, randAsset.is_tracked);
 
       await dbRun('UPDATE assets SET quantity = ?, status = ? WHERE id = ?', [newQty, status, randAsset.id]);
     }
@@ -1265,7 +1273,7 @@ app.post('/api/loans', async (req, res) => {
     }
     // 1. Deduct stock from asset
     const newQty = asset.quantity - qtyToLoan;
-    const newStatus = calculateStatus(newQty, asset.min_quantity);
+    const newStatus = calculateStatus(newQty, asset.min_quantity, asset.is_tracked);
     await dbRun('UPDATE assets SET quantity = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [newQty, newStatus, asset_id]);
     
     // 2. Log transaction
@@ -1322,7 +1330,7 @@ app.post('/api/loans/:id/return', async (req, res) => {
     const asset = await dbGet('SELECT * FROM assets WHERE id = ?', [loan.asset_id]);
     if (asset) {
       const newQty = asset.quantity + loan.quantity;
-      const newStatus = calculateStatus(newQty, asset.min_quantity);
+      const newStatus = calculateStatus(newQty, asset.min_quantity, asset.is_tracked);
       await dbRun('UPDATE assets SET quantity = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [newQty, newStatus, loan.asset_id]);
       
       // 3. Log transaction
