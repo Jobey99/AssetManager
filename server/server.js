@@ -258,6 +258,42 @@ app.put('/api/assets/:id', async (req, res) => {
       id
     ]);
 
+    // Sync product-level metadata to all other assets sharing the same old name or SKU
+    try {
+      let syncQuery = 'SELECT id, quantity FROM assets WHERE id != ? AND (name = ? COLLATE NOCASE';
+      let syncParams = [id, currentAsset.name];
+      if (currentAsset.sku && currentAsset.sku.trim() !== '') {
+        syncQuery += ' OR sku = ? COLLATE NOCASE';
+        syncParams.push(currentAsset.sku);
+      }
+      syncQuery += ')';
+
+      const siblings = await dbAll(syncQuery, syncParams);
+      for (const sibling of siblings) {
+        const siblingStatus = calculateStatus(sibling.quantity, minQtyVal);
+        await dbRun(`
+          UPDATE assets 
+          SET name = ?, description = ?, sku = ?, unit = ?, min_quantity = ?, status = ?, category = ?, 
+              purchase_price = ?, supplier_name = ?, supplier_url = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `, [
+          finalName,
+          description !== undefined ? description : currentAsset.description,
+          finalSku,
+          unit || currentAsset.unit,
+          minQtyVal,
+          siblingStatus,
+          category !== undefined ? category : currentAsset.category,
+          purchase_price !== undefined ? parseFloat(purchase_price) || 0.0 : currentAsset.purchase_price,
+          supplier_name !== undefined ? supplier_name : currentAsset.supplier_name,
+          supplier_url !== undefined ? supplier_url : currentAsset.supplier_url,
+          sibling.id
+        ]);
+      }
+    } catch (syncErr) {
+      console.error('Failed to sync sibling asset product details:', syncErr);
+    }
+
     const updatedAsset = await dbGet('SELECT * FROM assets WHERE id = ?', [id]);
     res.json(updatedAsset);
   } catch (error) {
