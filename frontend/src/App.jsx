@@ -114,6 +114,177 @@ function PrintableLabel({ asset }) {
   );
 }
 
+const parseAssetCategories = (categoryField) => {
+  if (!categoryField) return ['Uncategorized'];
+  try {
+    if (categoryField.startsWith('[')) {
+      const parsed = JSON.parse(categoryField);
+      if (Array.isArray(parsed)) {
+        return parsed.length > 0 ? parsed : ['Uncategorized'];
+      }
+    }
+  } catch (e) {
+    // Not valid JSON, treat as string
+  }
+  if (categoryField.includes(',')) {
+    return categoryField.split(',').map(c => c.trim()).filter(Boolean);
+  }
+  return [categoryField];
+};
+
+function CategoryMultiSelect({ selectedCategoryField, allCategoriesList, onChange, onAddNew }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (containerRef.current && !containerRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const selectedList = parseAssetCategories(selectedCategoryField);
+
+  const handleToggle = (catName) => {
+    let newList;
+    if (selectedList.includes(catName)) {
+      newList = selectedList.filter(c => c !== catName);
+    } else {
+      newList = [...selectedList, catName];
+      if (catName !== 'Uncategorized') {
+        newList = newList.filter(c => c !== 'Uncategorized');
+      }
+    }
+
+    if (newList.length === 0) {
+      newList = ['Uncategorized'];
+    }
+    onChange(JSON.stringify(newList));
+  };
+
+  return (
+    <div className="category-multi-select" ref={containerRef} style={{ position: 'relative', width: '100%' }}>
+      <div style={{ display: 'flex', gap: '8px' }}>
+        <div 
+          className="form-control" 
+          style={{ 
+            display: 'flex', 
+            flexWrap: 'wrap', 
+            gap: '6px', 
+            minHeight: '40px', 
+            height: 'auto',
+            alignItems: 'center', 
+            cursor: 'pointer',
+            padding: '6px 12px',
+            flexGrow: 1,
+            backgroundColor: 'var(--bg-input)',
+            border: '1px solid var(--border-color)',
+            borderRadius: 'var(--radius-md)',
+            position: 'relative'
+          }}
+          onClick={() => setIsOpen(!isOpen)}
+        >
+          {selectedList.length === 0 ? (
+            <span style={{ color: 'var(--text-secondary)' }}>Select Categories...</span>
+          ) : (
+            selectedList.map(cat => (
+              <span 
+                key={cat} 
+                className="badge badge-info"
+                style={{ 
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '3px 8px',
+                  borderRadius: '4px',
+                  margin: '2px 0',
+                  color: '#818cf8',
+                  background: 'var(--primary-glow)',
+                  border: '1px solid rgba(99, 102, 241, 0.2)'
+                }}
+              >
+                {cat}
+                <X 
+                  size={12} 
+                  style={{ cursor: 'pointer', marginLeft: '4px' }} 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleToggle(cat);
+                  }} 
+                />
+              </span>
+            ))
+          )}
+          <span style={{ marginLeft: 'auto', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+            {isOpen ? '▲' : '▼'}
+          </span>
+        </div>
+        <button 
+          type="button" 
+          className="btn btn-secondary btn-icon-only"
+          style={{ padding: '0 12px', minWidth: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={onAddNew}
+          title="Add global category"
+        >
+          <Plus size={16} />
+        </button>
+      </div>
+      
+      {isOpen && (
+        <div 
+          className="category-dropdown-menu" 
+          style={{ 
+            position: 'absolute', 
+            top: '100%', 
+            left: 0, 
+            right: 0, 
+            zIndex: 999, 
+            backgroundColor: 'var(--bg-card)', 
+            border: '1px solid var(--border-color)', 
+            borderRadius: 'var(--radius-md)', 
+            marginTop: '4px', 
+            maxHeight: '200px', 
+            overflowY: 'auto',
+            boxShadow: 'var(--shadow-lg)',
+            padding: '8px'
+          }}
+        >
+          {allCategoriesList.map(c => {
+            const isChecked = selectedList.includes(c.name);
+            return (
+              <div 
+                key={c.id || c.name} 
+                style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '10px', 
+                  padding: '8px 10px', 
+                  cursor: 'pointer',
+                  borderRadius: 'var(--radius-sm)',
+                  backgroundColor: isChecked ? 'var(--bg-card-hover)' : 'transparent',
+                  transition: 'var(--transition-fast)'
+                }}
+                onClick={() => handleToggle(c.name)}
+              >
+                <input 
+                  type="checkbox" 
+                  checked={isChecked} 
+                  onChange={() => {}} // handled by div onClick
+                  style={{ cursor: 'pointer' }}
+                />
+                <span style={{ color: 'var(--text-primary)', fontSize: '0.9rem' }}>{c.name}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   // Authentication & Session states
   const [isAuthenticated, setIsAuthenticated] = useState(() => !!localStorage.getItem('auth_token'));
@@ -2547,7 +2718,7 @@ function App() {
   const allCategories = React.useMemo(() => {
     const cats = new Set(categories.map(c => c.name));
     assets.forEach(a => {
-      cats.add(a.category || 'Uncategorized');
+      parseAssetCategories(a.category).forEach(cat => cats.add(cat));
     });
     return Array.from(cats).sort();
   }, [categories, assets]);
@@ -2603,12 +2774,12 @@ function App() {
           const matchesSearch = 
             a.name.toLowerCase().includes(query) ||
             (a.sku && a.sku.toLowerCase().includes(query)) ||
-            (a.category && a.category.toLowerCase().includes(query)) ||
+            (a.category && parseAssetCategories(a.category).some(cat => cat.toLowerCase().includes(query))) ||
             a.id.toLowerCase().includes(query);
           
           const matchesLocation = locationFilter === '' || Number(a.location_id) === Number(locationFilter);
           const matchesStatus = statusFilter === '' || a.status === statusFilter;
-          const matchesCategory = categoryFilter === '' || (a.category || 'Uncategorized') === categoryFilter;
+          const matchesCategory = categoryFilter === '' || parseAssetCategories(a.category).includes(categoryFilter);
           
           return matchesSearch && matchesLocation && matchesStatus && matchesCategory;
         })
@@ -2624,8 +2795,8 @@ function App() {
               valB = b.name.toLowerCase();
               break;
             case 'category':
-              valA = (a.category || 'Uncategorized').toLowerCase();
-              valB = (b.category || 'Uncategorized').toLowerCase();
+              valA = parseAssetCategories(a.category).join(', ').toLowerCase();
+              valB = parseAssetCategories(b.category).join(', ').toLowerCase();
               break;
             case 'location':
               valA = (a.location_name || 'Unassigned').toLowerCase();
@@ -2653,12 +2824,12 @@ function App() {
           const matchesSearch = 
             g.name.toLowerCase().includes(query) ||
             g.sku.toLowerCase().includes(query) ||
-            g.category.toLowerCase().includes(query) ||
+            (g.category && parseAssetCategories(g.category).some(cat => cat.toLowerCase().includes(query))) ||
             g.items.some(item => item.id.toLowerCase().includes(query));
           
           const matchesLocation = locationFilter === '' || g.items.some(item => Number(item.location_id) === Number(locationFilter));
           const matchesStatus = statusFilter === '' || g.items.some(item => item.status === statusFilter);
-          const matchesCategory = categoryFilter === '' || g.category === categoryFilter;
+          const matchesCategory = categoryFilter === '' || parseAssetCategories(g.category).includes(categoryFilter);
           
           return matchesSearch && matchesLocation && matchesStatus && matchesCategory;
         })
@@ -2674,8 +2845,8 @@ function App() {
               valB = b.name.toLowerCase();
               break;
             case 'category':
-              valA = a.category.toLowerCase();
-              valB = b.category.toLowerCase();
+              valA = parseAssetCategories(a.category).join(', ').toLowerCase();
+              valB = parseAssetCategories(b.category).join(', ').toLowerCase();
               break;
             case 'location':
               valA = a.locations.length;
@@ -3759,9 +3930,13 @@ function App() {
                                 </span>
                               </td>
                               <td style={{ fontWeight: '500' }}>
-                                <span className="badge badge-secondary" style={{ background: 'rgba(255, 255, 255, 0.08)', color: 'var(--text-secondary)' }}>
-                                  {a.category || 'Uncategorized'}
-                                </span>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                  {parseAssetCategories(a.category).map(cat => (
+                                    <span key={cat} className="badge badge-secondary" style={{ background: 'rgba(255, 255, 255, 0.08)', color: 'var(--text-secondary)' }}>
+                                      {cat}
+                                    </span>
+                                  ))}
+                                </div>
                               </td>
                               <td>{a.location_name || <span style={{ color: 'var(--text-muted)' }}>Unassigned</span>}</td>
                               <td>
@@ -3844,9 +4019,13 @@ function App() {
                                   </div>
                                 </td>
                                 <td style={{ fontWeight: '500' }}>
-                                  <span className="badge badge-secondary" style={{ background: 'rgba(255, 255, 255, 0.08)', color: 'var(--text-secondary)' }}>
-                                    {a.category}
-                                  </span>
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                    {parseAssetCategories(a.category).map(cat => (
+                                      <span key={cat} className="badge badge-secondary" style={{ background: 'rgba(255, 255, 255, 0.08)', color: 'var(--text-secondary)' }}>
+                                        {cat}
+                                      </span>
+                                    ))}
+                                  </div>
                                 </td>
                                 <td style={{ fontSize: '0.9rem' }}>
                                   <strong style={{ color: 'white' }}>{totalLocations}</strong> {totalLocations === 1 ? 'location' : 'locations'}
@@ -3990,7 +4169,7 @@ function App() {
                         <div className="mobile-asset-card-body">
                           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '0.85rem' }}>
                             <span style={{ color: 'var(--text-secondary)' }}>Category:</span>
-                            <strong style={{ color: 'white' }}>{a.category || 'Uncategorized'}</strong>
+                            <strong style={{ color: 'white' }}>{parseAssetCategories(a.category).join(', ')}</strong>
                           </div>
                           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '0.85rem' }}>
                             <span style={{ color: 'var(--text-secondary)' }}>Location:</span>
@@ -4067,7 +4246,7 @@ function App() {
                               {a.name}
                             </h3>
                             <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginTop: '2px' }}>
-                              {a.sku ? `SKU: ${a.sku}` : 'No SKU'} | {a.category}
+                              {a.sku ? `SKU: ${a.sku}` : 'No SKU'} | {parseAssetCategories(a.category).join(', ')}
                             </span>
                           </div>
                           <span className={`badge ${
@@ -4208,27 +4387,12 @@ function App() {
                       </div>
                       <div className="form-group">
                         <label className="form-label">Category</label>
-                        <div style={{ display: 'flex', gap: '8px' }}>
-                          <select 
-                            className="form-control" 
-                            value={newAsset.category || 'Uncategorized'}
-                            onChange={(e) => setNewAsset({ ...newAsset, category: e.target.value })}
-                            style={{ flexGrow: 1 }}
-                          >
-                            {categories.map(c => (
-                              <option key={c.id} value={c.name}>{c.name}</option>
-                            ))}
-                          </select>
-                          <button 
-                            type="button" 
-                            className="btn btn-secondary btn-icon-only"
-                            style={{ padding: '0 12px', minWidth: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                            onClick={() => setShowAddCategory(true)}
-                            title="Add global category"
-                          >
-                            <Plus size={16} />
-                          </button>
-                        </div>
+                        <CategoryMultiSelect
+                          selectedCategoryField={newAsset.category}
+                          allCategoriesList={categories}
+                          onChange={(val) => setNewAsset({ ...newAsset, category: val })}
+                          onAddNew={() => setShowAddCategory(true)}
+                        />
                       </div>
                     </div>
 
@@ -4435,27 +4599,12 @@ function App() {
                       </div>
                       <div className="form-group">
                         <label className="form-label">Category</label>
-                        <div style={{ display: 'flex', gap: '8px' }}>
-                          <select 
-                            className="form-control" 
-                            value={editingAsset.category || 'Uncategorized'}
-                            onChange={(e) => setEditingAsset({ ...editingAsset, category: e.target.value })}
-                            style={{ flexGrow: 1 }}
-                          >
-                            {categories.map(c => (
-                              <option key={c.id} value={c.name}>{c.name}</option>
-                            ))}
-                          </select>
-                          <button 
-                            type="button" 
-                            className="btn btn-secondary btn-icon-only"
-                            style={{ padding: '0 12px', minWidth: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                            onClick={() => setShowAddCategory(true)}
-                            title="Add global category"
-                          >
-                            <Plus size={16} />
-                          </button>
-                        </div>
+                        <CategoryMultiSelect
+                          selectedCategoryField={editingAsset.category}
+                          allCategoriesList={categories}
+                          onChange={(val) => setEditingAsset({ ...editingAsset, category: val })}
+                          onAddNew={() => setShowAddCategory(true)}
+                        />
                       </div>
                     </div>
 
@@ -4562,7 +4711,7 @@ function App() {
                           <div className="form-group" style={{ marginBottom: 0 }}>
                             <label className="form-label">Supplier Reorder URL</label>
                             <input 
-                              type="url" 
+                          type="url" 
                               className="form-control" 
                               placeholder="e.g. https://uk.rs-online.com/..."
                               value={editingAsset.supplier_url || ''}
@@ -6908,7 +7057,13 @@ function App() {
               </div>
               <div className="panel" style={{ padding: '14px', margin: '0' }}>
                 <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Category</span>
-                <p style={{ fontSize: '1.05rem', fontWeight: '600' }}>{activeAsset.category || 'Uncategorized'}</p>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '4px' }}>
+                  {parseAssetCategories(activeAsset.category).map(cat => (
+                    <span key={cat} className="badge badge-info" style={{ color: '#818cf8', background: 'var(--primary-glow)', border: '1px solid rgba(99, 102, 241, 0.2)' }}>
+                      {cat}
+                    </span>
+                  ))}
+                </div>
               </div>
               <div className="panel" style={{ padding: '14px', margin: '0' }}>
                 <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>SKU / Model Ref</span>

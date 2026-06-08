@@ -386,7 +386,12 @@ app.get('/api/categories', async (req, res) => {
     const categories = await dbAll(`
       SELECT categories.*, COUNT(assets.id) as asset_count 
       FROM categories 
-      LEFT JOIN assets ON categories.name = assets.category
+      LEFT JOIN assets ON (
+        (json_valid(assets.category) AND EXISTS (
+          SELECT 1 FROM json_each(assets.category) WHERE value = categories.name
+        )) OR
+        (NOT json_valid(assets.category) AND assets.category = categories.name)
+      )
       GROUP BY categories.id
       ORDER BY categories.name ASC
     `);
@@ -427,7 +432,30 @@ app.delete('/api/categories/:id', async (req, res) => {
     if (category.name.toLowerCase() === 'uncategorized') {
       return res.status(400).json({ error: 'The default category "Uncategorized" cannot be deleted.' });
     }
-    await dbRun("UPDATE assets SET category = 'Uncategorized' WHERE category = ?", [category.name]);
+
+    // Update assets containing this category
+    const assets = await dbAll('SELECT id, category FROM assets');
+    for (const asset of assets) {
+      if (asset.category) {
+        let cats = [];
+        try {
+          if (asset.category.startsWith('[')) {
+            cats = JSON.parse(asset.category);
+          } else {
+            cats = [asset.category];
+          }
+        } catch (e) {
+          cats = [asset.category];
+        }
+
+        if (cats.includes(category.name)) {
+          const newCats = cats.filter(c => c !== category.name);
+          const updatedCategory = newCats.length > 0 ? JSON.stringify(newCats) : 'Uncategorized';
+          await dbRun('UPDATE assets SET category = ? WHERE id = ?', [updatedCategory, asset.id]);
+        }
+      }
+    }
+
     await dbRun('DELETE FROM categories WHERE id = ?', [id]);
     res.json({ message: 'Category deleted successfully' });
   } catch (error) {
@@ -1082,8 +1110,18 @@ app.get('/api/admin/diagnostics', async (req, res) => {
     `);
     
     const orphanedCategories = await dbAll(`
-      SELECT id, name, category FROM assets 
-      WHERE category IS NOT NULL AND category != 'Uncategorized' AND category NOT IN (SELECT name FROM categories)
+      SELECT assets.id, assets.name, assets.category 
+      FROM assets 
+      WHERE assets.category IS NOT NULL 
+        AND assets.category != 'Uncategorized'
+        AND assets.category != '[]'
+        AND EXISTS (
+          SELECT 1 FROM (
+            SELECT value AS cat_name FROM json_each(assets.category) WHERE json_valid(assets.category)
+            UNION ALL
+            SELECT assets.category AS cat_name WHERE NOT json_valid(assets.category)
+          ) WHERE cat_name NOT IN (SELECT name FROM categories)
+        )
     `);
 
     // Missing barcodes / QR codes / serial numbers
