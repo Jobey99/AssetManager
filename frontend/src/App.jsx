@@ -29,7 +29,8 @@ import {
   Wrench,
   ShoppingCart,
   Clock,
-  BookOpen
+  BookOpen,
+  Sliders
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import QRCode from 'qrcode';
@@ -54,6 +55,12 @@ const getApiBase = () => {
 };
 
 const API_BASE = getApiBase();
+
+// Initialize theme immediately to prevent flashing
+(function() {
+  const cachedTheme = localStorage.getItem('cached_theme') || 'indigo';
+  document.body.className = `theme-${cachedTheme}`;
+})();
 
 // Helper component to render QR Codes dynamically
 function QrCodeImage({ value, size = 150 }) {
@@ -353,6 +360,123 @@ function App() {
   useEffect(() => {
     localStorage.setItem('sidebar_visibility', JSON.stringify(sidebarVisibility));
   }, [sidebarVisibility]);
+
+  // User Preferences states
+  const [selectedTheme, setSelectedTheme] = useState(() => {
+    try {
+      const user = JSON.parse(localStorage.getItem('auth_user') || '{}');
+      return user.preferences?.theme || 'indigo';
+    } catch {
+      return 'indigo';
+    }
+  });
+  const [selectedLandingPage, setSelectedLandingPage] = useState(() => {
+    try {
+      const user = JSON.parse(localStorage.getItem('auth_user') || '{}');
+      return user.preferences?.landingPage || 'dashboard';
+    } catch {
+      return 'dashboard';
+    }
+  });
+  const [selectedDefaultView, setSelectedDefaultView] = useState(() => {
+    try {
+      const user = JSON.parse(localStorage.getItem('auth_user') || '{}');
+      return user.preferences?.defaultView || 'grouped';
+    } catch {
+      return 'grouped';
+    }
+  });
+  const [selectedScannerBeep, setSelectedScannerBeep] = useState(() => {
+    try {
+      const user = JSON.parse(localStorage.getItem('auth_user') || '{}');
+      return user.preferences?.scannerBeep !== false;
+    } catch {
+      return true;
+    }
+  });
+
+  const playBeep = () => {
+    try {
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // A5 note
+      gainNode.gain.setValueAtTime(0.05, audioCtx.currentTime);
+      
+      oscillator.start();
+      oscillator.stop(audioCtx.currentTime + 0.15);
+    } catch (e) {
+      console.warn("Audio Context error:", e);
+    }
+  };
+
+  const themeOptions = [
+    { id: 'indigo', name: 'Indigo', color: '#6366f1' },
+    { id: 'orange', name: 'Orange', color: '#f97316' },
+    { id: 'green', name: 'Green', color: '#10b981' },
+    { id: 'blue', name: 'Blue', color: '#3b82f6' },
+    { id: 'rose', name: 'Rose', color: '#f43f5e' },
+    { id: 'amber', name: 'Amber', color: '#f59e0b' },
+    { id: 'teal', name: 'Teal', color: '#14b8a6' },
+    { id: 'purple', name: 'Purple', color: '#a855f7' },
+    { id: 'zavi', name: 'ZAVI (AV Light Theme)', color: '#16b5b5' }
+  ];
+
+  // Apply theme to document body on changes
+  useEffect(() => {
+    const classes = document.body.className.split(' ').filter(c => !c.startsWith('theme-') && c !== '');
+    classes.push(`theme-${selectedTheme}`);
+    document.body.className = classes.join(' ');
+    localStorage.setItem('cached_theme', selectedTheme);
+  }, [selectedTheme]);
+
+  // Synchronize state when currentUser is loaded
+  useEffect(() => {
+    if (currentUser?.preferences) {
+      setSelectedTheme(currentUser.preferences.theme || 'indigo');
+      setSelectedLandingPage(currentUser.preferences.landingPage || 'dashboard');
+      setSelectedDefaultView(currentUser.preferences.defaultView || 'grouped');
+      setSelectedScannerBeep(currentUser.preferences.scannerBeep !== false);
+    }
+  }, [currentUser]);
+
+  const handleSavePreferences = async () => {
+    const preferencesPayload = {
+      theme: selectedTheme,
+      landingPage: selectedLandingPage,
+      defaultView: selectedDefaultView,
+      scannerBeep: selectedScannerBeep
+    };
+
+    try {
+      const res = await authFetch(`${API_BASE}/auth/preferences`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preferences: preferencesPayload })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const updatedUser = { ...currentUser, preferences: data.preferences };
+        setCurrentUser(updatedUser);
+        localStorage.setItem('auth_user', JSON.stringify(updatedUser));
+        alert("User preferences saved successfully!");
+      } else {
+        const errData = await res.json();
+        alert(`Failed to save preferences: ${errData.error || 'Unknown error'}`);
+      }
+    } catch (e) {
+      console.warn("Saving preferences offline:", e);
+      const updatedUser = { ...currentUser, preferences: preferencesPayload };
+      setCurrentUser(updatedUser);
+      localStorage.setItem('auth_user', JSON.stringify(updatedUser));
+      alert("Preferences saved locally (offline mode).");
+    }
+  };
   
   // Print Queue
   const [printQueue, setPrintQueue] = useState([]);
@@ -496,6 +620,20 @@ function App() {
         setCurrentUser(data.user);
         setTxUser(data.user.name);
         
+        // Apply user preferences on login
+        if (data.user.preferences?.landingPage) {
+          setCurrentView(data.user.preferences.landingPage);
+        }
+        if (data.user.preferences?.defaultView) {
+          setViewMode(data.user.preferences.defaultView);
+        }
+        if (data.user.preferences?.theme) {
+          setSelectedTheme(data.user.preferences.theme);
+        }
+        if (data.user.preferences?.scannerBeep !== undefined) {
+          setSelectedScannerBeep(data.user.preferences.scannerBeep !== false);
+        }
+
         // Keep inputs filled if remembered, otherwise clear
         if (!rememberMe) {
           setLoginUsername('');
@@ -541,6 +679,20 @@ function App() {
           setCurrentUser(match);
           setTxUser(match.name);
           
+          // Apply user preferences on offline login
+          if (match.preferences?.landingPage) {
+            setCurrentView(match.preferences.landingPage);
+          }
+          if (match.preferences?.defaultView) {
+            setViewMode(match.preferences.defaultView);
+          }
+          if (match.preferences?.theme) {
+            setSelectedTheme(match.preferences.theme);
+          }
+          if (match.preferences?.scannerBeep !== undefined) {
+            setSelectedScannerBeep(match.preferences.scannerBeep !== false);
+          }
+
           if (!rememberMe) {
             setLoginUsername('');
             setLoginPassword('');
@@ -570,6 +722,13 @@ function App() {
     localStorage.removeItem('auth_user');
     setIsAuthenticated(false);
     setCurrentUser(null);
+    
+    // Reset preferences states to defaults on logout
+    setSelectedTheme('indigo');
+    setSelectedLandingPage('dashboard');
+    setSelectedDefaultView('grouped');
+    setSelectedScannerBeep(true);
+
     // Restore saved credentials to fields if they exist
     setLoginUsername(localStorage.getItem('saved_username') || '');
     setLoginPassword(localStorage.getItem('saved_password') || '');
@@ -1281,6 +1440,11 @@ function App() {
     const qrId = extractAssetId(rawText);
     if (!qrId) return;
     stopScanner();
+    
+    // Play scanner beep sound if enabled
+    if (selectedScannerBeep) {
+      playBeep();
+    }
     try {
       const res = await authFetch(`${API_BASE}/assets/${qrId}`);
       if (res.ok) {
@@ -5429,87 +5593,218 @@ function App() {
             </div>
 
             {/* TAB CONTENT: PROFILE */}
+            {/* TAB CONTENT: PROFILE */}
             {settingsTab === 'profile' && (
               <div className="dashboard-layout" style={{ gridTemplateColumns: '1fr 1fr' }}>
-                <div className="panel">
-                  <div className="panel-header">
-                    <h3 className="panel-title"><User size={18} /> Credentials & Session</h3>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                      <div className="avatar" style={{ width: '48px', height: '48px', fontSize: '1.25rem', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', backgroundColor: 'var(--accent-indigo)', color: 'white', fontWeight: 'bold' }}>
-                        {currentUser?.name ? currentUser.name.substring(0, 2).toUpperCase() : 'U'}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                  <div className="panel">
+                    <div className="panel-header">
+                      <h3 className="panel-title"><User size={18} /> Credentials & Session</h3>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                      <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                        <div className="avatar" style={{ width: '48px', height: '48px', fontSize: '1.25rem', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', backgroundColor: 'var(--primary)', color: 'white', fontWeight: 'bold' }}>
+                          {currentUser?.name ? currentUser.name.substring(0, 2).toUpperCase() : 'U'}
+                        </div>
+                        <div>
+                          <h4 style={{ margin: 0, color: 'white', fontSize: '1.1rem' }}>{currentUser?.name || 'Unknown User'}</h4>
+                          <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                            System Role: <strong style={{ color: 'var(--primary)' }}>{currentUser?.role || 'Guest'}</strong>
+                          </span>
+                        </div>
                       </div>
-                      <div>
-                        <h4 style={{ margin: 0, color: 'white', fontSize: '1.1rem' }}>{currentUser?.name || 'Unknown User'}</h4>
-                        <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                          System Role: <strong style={{ color: 'var(--accent-indigo)' }}>{currentUser?.role || 'Guest'}</strong>
-                        </span>
+                      
+                      <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginTop: '8px' }}>
+                        <button 
+                          type="button"
+                          className="btn btn-primary" 
+                          onClick={() => {
+                            setChangePasswordError('');
+                            setChangePasswordSuccess('');
+                            setChangePasswordOld('');
+                            setChangePasswordNew('');
+                            setChangePasswordConfirm('');
+                            setShowChangePasswordModal(true);
+                          }}
+                          style={{ padding: '8px 16px', fontSize: '0.85rem' }}
+                        >
+                          Change Password
+                        </button>
+                        <button 
+                          type="button"
+                          className="btn btn-secondary" 
+                          onClick={handleLogout}
+                          style={{ padding: '8px 16px', fontSize: '0.85rem', borderColor: 'var(--accent-rose)', color: 'var(--accent-rose)', background: 'transparent' }}
+                        >
+                          Sign Out
+                        </button>
                       </div>
                     </div>
-                    
-                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginTop: '8px' }}>
-                      <button 
-                        type="button"
-                        className="btn btn-primary" 
-                        onClick={() => {
-                          setChangePasswordError('');
-                          setChangePasswordSuccess('');
-                          setChangePasswordOld('');
-                          setChangePasswordNew('');
-                          setChangePasswordConfirm('');
-                          setShowChangePasswordModal(true);
-                        }}
-                        style={{ padding: '8px 16px', fontSize: '0.85rem' }}
-                      >
-                        Change Password
-                      </button>
-                      <button 
-                        type="button"
-                        className="btn btn-secondary" 
-                        onClick={handleLogout}
-                        style={{ padding: '8px 16px', fontSize: '0.85rem', borderColor: 'var(--accent-rose)', color: 'var(--accent-rose)', background: 'transparent' }}
-                      >
-                        Sign Out
-                      </button>
+                  </div>
+
+                  <div className="panel">
+                    <div className="panel-header">
+                      <h3 className="panel-title"><ArrowLeftRight size={18} /> Mobile App Connection</h3>
+                    </div>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">Default Server IP / URL</label>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <input 
+                          type="text" 
+                          className="form-control" 
+                          value={serverInput}
+                          onChange={(e) => setServerInput(e.target.value)}
+                          placeholder="e.g. https://assets.josh-green.uk"
+                        />
+                        <button 
+                          className="btn btn-secondary" 
+                          type="button" 
+                          onClick={() => {
+                            let formattedUrl = serverInput.trim().replace(/\/$/, "");
+                            if (formattedUrl && !/^https?:\/\//i.test(formattedUrl)) {
+                              formattedUrl = "http://" + formattedUrl;
+                            }
+                            localStorage.setItem('server_api_url', formattedUrl);
+                            setServerUrl(formattedUrl);
+                            alert(`App server URL updated to: ${formattedUrl}\nReconnecting...`);
+                            window.location.reload();
+                          }}
+                        >
+                          Save & Apply
+                        </button>
+                      </div>
+                      <small style={{ color: 'var(--text-muted)', marginTop: '8px', display: 'block' }}>
+                        Configure the IP/domain that this client device connects to.
+                      </small>
                     </div>
                   </div>
                 </div>
 
                 <div className="panel">
                   <div className="panel-header">
-                    <h3 className="panel-title"><ArrowLeftRight size={18} /> Mobile App Connection</h3>
+                    <h3 className="panel-title"><Sliders size={18} /> User Preferences</h3>
                   </div>
-                  <div className="form-group" style={{ margin: 0 }}>
-                    <label className="form-label">Default Server IP / URL</label>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <input 
-                        type="text" 
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                    {/* Theme Accent Section */}
+                    <div>
+                      <label className="form-label" style={{ marginBottom: '8px', display: 'block' }}>Accent Theme</label>
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '6px' }}>
+                        {themeOptions.map(opt => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => setSelectedTheme(opt.id)}
+                            title={opt.name}
+                            style={{
+                              width: '36px',
+                              height: '36px',
+                              borderRadius: '50%',
+                              backgroundColor: opt.color,
+                              border: selectedTheme === opt.id ? '3px solid white' : '2px solid rgba(255,255,255,0.1)',
+                              boxShadow: selectedTheme === opt.id ? '0 0 10px var(--primary)' : 'none',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              transition: 'all 0.2s ease',
+                              padding: 0
+                            }}
+                          >
+                            {opt.id === 'zavi' && (
+                              <div style={{ fontSize: '9px', fontWeight: 'bold', color: '#eaeef1', textShadow: '1px 1px 1px #000' }}>ZV</div>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                      <small style={{ color: 'var(--text-secondary)', display: 'block', marginTop: '6px' }}>
+                        Selected: <strong style={{ textTransform: 'capitalize' }}>{selectedTheme === 'zavi' ? 'ZAVI' : selectedTheme}</strong> {selectedTheme === 'zavi' ? '(AV Light Theme)' : '(Dark Theme Accent)'}
+                      </small>
+                    </div>
+
+                    {/* Default Landing Tab */}
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">Default Landing Tab</label>
+                      <select 
                         className="form-control" 
-                        value={serverInput}
-                        onChange={(e) => setServerInput(e.target.value)}
-                        placeholder="e.g. https://assets.josh-green.uk"
-                      />
-                      <button 
-                        className="btn btn-secondary" 
-                        type="button" 
-                        onClick={() => {
-                          let formattedUrl = serverInput.trim().replace(/\/$/, "");
-                          if (formattedUrl && !/^https?:\/\//i.test(formattedUrl)) {
-                            formattedUrl = "http://" + formattedUrl;
-                          }
-                          localStorage.setItem('server_api_url', formattedUrl);
-                          setServerUrl(formattedUrl);
-                          alert(`App server URL updated to: ${formattedUrl}\nReconnecting...`);
-                          window.location.reload();
-                        }}
+                        value={selectedLandingPage} 
+                        onChange={(e) => setSelectedLandingPage(e.target.value)}
                       >
-                        Save & Apply
+                        <option value="dashboard">Dashboard</option>
+                        <option value="assets">Assets</option>
+                        <option value="locations">Locations</option>
+                        <option value="installations">Installations</option>
+                        <option value="loans">Loans</option>
+                      </select>
+                      <small style={{ color: 'var(--text-muted)', display: 'block', marginTop: '4px' }}>
+                        Which screen is shown first after logging in.
+                      </small>
+                    </div>
+
+                    {/* Default View Mode */}
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">Default Asset View</label>
+                      <select 
+                        className="form-control" 
+                        value={selectedDefaultView} 
+                        onChange={(e) => setSelectedDefaultView(e.target.value)}
+                      >
+                        <option value="grouped">Grouped by Location</option>
+                        <option value="individual">Flat List (Individual Assets)</option>
+                      </select>
+                      <small style={{ color: 'var(--text-muted)', display: 'block', marginTop: '4px' }}>
+                        Default layout style for the Assets panel.
+                      </small>
+                    </div>
+
+                    {/* Scanner Beep Toggle */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0' }}>
+                      <div>
+                        <span style={{ fontSize: '0.9rem', fontWeight: '500', display: 'block' }}>Scanner Success Audio</span>
+                        <small style={{ color: 'var(--text-muted)' }}>Play a beep sound on successful scans</small>
+                      </div>
+                      <label className="switch" style={{ position: 'relative', display: 'inline-block', width: '40px', height: '20px' }}>
+                        <input 
+                          type="checkbox" 
+                          checked={selectedScannerBeep} 
+                          onChange={(e) => {
+                            setSelectedScannerBeep(e.target.checked);
+                            if (e.target.checked) playBeep();
+                          }}
+                          style={{ opacity: 0, width: 0, height: 0 }}
+                        />
+                        <span className="slider round" style={{
+                          position: 'absolute',
+                          cursor: 'pointer',
+                          top: 0, left: 0, right: 0, bottom: 0,
+                          backgroundColor: selectedScannerBeep ? 'var(--primary)' : '#475569',
+                          transition: '0.3s',
+                          borderRadius: '20px'
+                        }}>
+                          <span style={{
+                            position: 'absolute',
+                            content: '""',
+                            height: '14px', width: '14px',
+                            left: selectedScannerBeep ? '23px' : '3px',
+                            bottom: '3px',
+                            backgroundColor: 'white',
+                            transition: '0.3s',
+                            borderRadius: '50%'
+                          }} />
+                        </span>
+                      </label>
+                    </div>
+
+                    {/* Save Button */}
+                    <div style={{ marginTop: '8px' }}>
+                      <button 
+                        type="button" 
+                        className="btn btn-primary" 
+                        onClick={handleSavePreferences}
+                        style={{ width: '100%', padding: '10px 16px', fontWeight: '600' }}
+                      >
+                        Save Preferences
                       </button>
                     </div>
-                    <small style={{ color: 'var(--text-muted)', marginTop: '8px', display: 'block' }}>
-                      Configure the IP/domain that this client device connects to.
-                    </small>
                   </div>
                 </div>
               </div>

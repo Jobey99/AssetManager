@@ -132,6 +132,7 @@ async function initDatabase() {
         role TEXT CHECK(role IN ('Engineer', 'Sales', 'Purchasing', 'Admin')) NOT NULL,
         password_hash TEXT,
         salt TEXT,
+        preferences TEXT DEFAULT '{}',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `);
@@ -174,6 +175,14 @@ async function initDatabase() {
       await dbRun('ALTER TABLE users ADD COLUMN password_hash TEXT');
       await dbRun('ALTER TABLE users ADD COLUMN salt TEXT');
       console.log('Migrated users table with password fields.');
+    } catch (e) {
+      // Column might already exist
+    }
+
+    // Migration: Add preferences column if it doesn't exist on pre-existing users tables
+    try {
+      await dbRun("ALTER TABLE users ADD COLUMN preferences TEXT DEFAULT '{}'");
+      console.log('Migrated users table with preferences field.');
     } catch (e) {
       // Column might already exist
     }

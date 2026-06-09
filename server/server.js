@@ -657,8 +657,8 @@ app.post('/api/transactions', async (req, res) => {
 // GET /api/users - Available to all logged-in users (needed for checkout selection)
 app.get('/api/users', async (req, res) => {
   try {
-    const users = await dbAll('SELECT id, name, role, created_at FROM users ORDER BY name ASC');
-    res.json(users);
+    const users = await dbAll('SELECT id, name, role, preferences, created_at FROM users ORDER BY name ASC');
+    res.json(users.map(u => ({ ...u, preferences: JSON.parse(u.preferences || '{}') })));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -833,14 +833,15 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     const token = crypto.randomBytes(32).toString('hex');
-    activeSessions.set(token, { id: user.id, name: user.name, role: user.role });
+    activeSessions.set(token, { id: user.id, name: user.name, role: user.role, preferences: JSON.parse(user.preferences || '{}') });
 
     res.json({
       token,
       user: {
         id: user.id,
         name: user.name,
-        role: user.role
+        role: user.role,
+        preferences: JSON.parse(user.preferences || '{}')
       }
     });
   } catch (error) {
@@ -886,6 +887,33 @@ app.post('/api/auth/change-password', async (req, res) => {
     );
 
     res.json({ message: 'Password updated successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/auth/preferences - Update current user's preferences
+app.post('/api/auth/preferences', async (req, res) => {
+  try {
+    const { preferences } = req.body;
+    if (!preferences) {
+      return res.status(400).json({ error: 'Preferences are required' });
+    }
+
+    const prefString = typeof preferences === 'string' ? preferences : JSON.stringify(preferences);
+
+    // Update preferences in DB
+    await dbRun('UPDATE users SET preferences = ? WHERE id = ?', [prefString, req.user.id]);
+
+    // Update preferences in active sessions
+    const token = req.headers['authorization'];
+    if (token && activeSessions.has(token)) {
+      const session = activeSessions.get(token);
+      session.preferences = JSON.parse(prefString);
+      activeSessions.set(token, session);
+    }
+
+    res.json({ message: 'Preferences updated successfully', preferences: JSON.parse(prefString) });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

@@ -22,6 +22,10 @@
   --accent-rose-glow: rgba(244, 63, 94, 0.15);
   
   --accent-amber: #f59e0b;    /* Amber (Low Stock / Warning) */
+  --accent-indigo: #6366f1;
+  --accent-indigo-hover: #4f46e5;
+  --accent-teal: #14b8a6;
+  --accent-teal-hover: #0d9488;
   
   /* Text colors */
   --text-primary: #f8fafc;
@@ -43,6 +47,139 @@
   
   --transition-fast: 0.15s ease;
   --transition-normal: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* User Accent Themes */
+body.theme-indigo {
+  --primary: #6366f1;
+  --primary-glow: rgba(99, 102, 241, 0.15);
+  --primary-hover: #4f46e5;
+  --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.25);
+}
+
+body.theme-orange {
+  --primary: #f97316;
+  --primary-glow: rgba(249, 115, 22, 0.15);
+  --primary-hover: #ea580c;
+  --shadow-glow: 0 0 20px rgba(249, 115, 22, 0.25);
+}
+
+body.theme-green {
+  --primary: #10b981;
+  --primary-glow: rgba(16, 185, 129, 0.15);
+  --primary-hover: #059669;
+  --shadow-glow: 0 0 20px rgba(16, 185, 129, 0.25);
+}
+
+body.theme-blue {
+  --primary: #3b82f6;
+  --primary-glow: rgba(59, 130, 246, 0.15);
+  --primary-hover: #2563eb;
+  --shadow-glow: 0 0 20px rgba(59, 130, 246, 0.25);
+}
+
+body.theme-rose {
+  --primary: #f43f5e;
+  --primary-glow: rgba(244, 63, 94, 0.15);
+  --primary-hover: #e11d48;
+  --shadow-glow: 0 0 20px rgba(244, 63, 94, 0.25);
+}
+
+body.theme-amber {
+  --primary: #f59e0b;
+  --primary-glow: rgba(245, 158, 11, 0.15);
+  --primary-hover: #d97706;
+  --shadow-glow: 0 0 20px rgba(245, 158, 11, 0.25);
+}
+
+body.theme-teal {
+  --primary: #14b8a6;
+  --primary-glow: rgba(20, 184, 166, 0.15);
+  --primary-hover: #0d9488;
+  --shadow-glow: 0 0 20px rgba(20, 184, 166, 0.25);
+}
+
+body.theme-purple {
+  --primary: #a855f7;
+  --primary-glow: rgba(168, 85, 247, 0.15);
+  --primary-hover: #9333ea;
+  --shadow-glow: 0 0 20px rgba(168, 85, 247, 0.25);
+}
+
+/* ZAVI Custom Light Theme */
+body.theme-zavi {
+  --bg-main: #eaeef1;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f1f5f9;
+  --bg-input: #f8fafc;
+  
+  --primary: #16b5b5;
+  --primary-glow: rgba(22, 181, 181, 0.12);
+  --primary-hover: #0d9494;
+  
+  --accent-cyan: #16b5b5;
+  --accent-emerald: #10b981;
+  --accent-emerald-glow: rgba(16, 185, 129, 0.1);
+  --accent-rose: #f43f5e;
+  --accent-rose-glow: rgba(244, 63, 94, 0.1);
+  --accent-amber: #ff9333; /* ZAVI Orange */
+  
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  
+  --border-color: rgba(15, 23, 42, 0.08);
+  --border-focus: rgba(22, 181, 181, 0.4);
+  
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -1px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04);
+  --shadow-glow: 0 0 20px rgba(22, 181, 181, 0.25);
+}
+
+/* ZAVI Theme: overrides for elements that use inline style white color */
+body.theme-zavi .panel h3,
+body.theme-zavi .panel h4,
+body.theme-zavi .panel strong,
+body.theme-zavi .panel p,
+body.theme-zavi .panel label,
+body.theme-zavi .panel span:not(.badge):not(.btn):not(.logo-icon):not(.avatar),
+body.theme-zavi .custom-table td,
+body.theme-zavi .custom-table th,
+body.theme-zavi .feed-highlight,
+body.theme-zavi .page-title-group h1,
+body.theme-zavi .page-title-group p,
+body.theme-zavi .drawer h3,
+body.theme-zavi .drawer h4,
+body.theme-zavi .drawer strong,
+body.theme-zavi .drawer label,
+body.theme-zavi .drawer p,
+body.theme-zavi .drawer span:not(.badge):not(.btn) {
+  color: var(--text-primary) !important;
+}
+
+body.theme-zavi .panel p,
+body.theme-zavi .drawer p,
+body.theme-zavi .panel small,
+body.theme-zavi .drawer small {
+  color: var(--text-secondary) !important;
+}
+
+/* Fix input controls in light theme */
+body.theme-zavi .form-control {
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+}
+
+body.theme-zavi .form-control:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-glow);
+}
+
+body.theme-zavi input::placeholder,
+body.theme-zavi textarea::placeholder {
+  color: var(--text-muted);
 }
 
 /* Reset & Globals */
