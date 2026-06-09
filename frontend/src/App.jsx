@@ -30,7 +30,9 @@ import {
   ShoppingCart,
   Clock,
   BookOpen,
-  Sliders
+  Sliders,
+  ArrowDownLeft,
+  ArrowUpRight
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import QRCode from 'qrcode';
@@ -346,15 +348,24 @@ function App() {
   const [installSearchQ, setInstallSearchQ] = useState('');
   const [installStatusFilter, setInstallStatusFilter] = useState('');
   const [loansTab, setLoansTab] = useState('active');
+  const [auditSearchQuery, setAuditSearchQuery] = useState('');
+  const [auditTypeFilter, setAuditTypeFilter] = useState('');
+  const [auditLocationFilter, setAuditLocationFilter] = useState('');
   const [sidebarVisibility, setSidebarVisibility] = useState(() => {
     const saved = localStorage.getItem('sidebar_visibility');
-    return saved ? JSON.parse(saved) : {
+    const defaults = {
       locations: true,
       installations: true,
       loans: true,
       shoppingList: true,
-      printer: true
+      printer: true,
+      transactions: true
     };
+    try {
+      return saved ? { ...defaults, ...JSON.parse(saved) } : defaults;
+    } catch {
+      return defaults;
+    }
   });
 
   useEffect(() => {
@@ -394,6 +405,14 @@ function App() {
       return true;
     }
   });
+
+  const isTabAllowed = (tabName) => {
+    if (!currentUser) return false;
+    if (currentUser.role === 'Admin') return true;
+    const allowed = currentUser.preferences?.allowedSidebarViews;
+    if (!allowed) return true;
+    return allowed[tabName] !== false;
+  };
 
   const playBeep = () => {
     try {
@@ -559,7 +578,21 @@ function App() {
   const [newAsset, setNewAsset] = useState({ id: '', name: '', description: '', sku: '', quantity: 0, unit: 'pcs', location_id: '', min_quantity: 0, category: 'Uncategorized', serial_number: '', warranty_expiry: '', purchase_price: 0.0, supplier_name: '', supplier_url: '', is_tracked: 1 });
   const [newLocation, setNewLocation] = useState({ name: '', description: '' });
   const [newCategory, setNewCategory] = useState({ name: '', description: '' });
-  const [newUser, setNewUser] = useState({ name: '', role: 'Engineer', password: '' });
+  const [newUser, setNewUser] = useState({ 
+    name: '', 
+    role: 'Engineer', 
+    password: '', 
+    preferences: { 
+      allowedSidebarViews: { 
+        locations: true, 
+        installations: true, 
+        loans: true, 
+        shoppingList: true, 
+        printer: true, 
+        transactions: true 
+      } 
+    } 
+  });
   const [backups, setBackups] = useState([]);
   const [adminDiagnostics, setAdminDiagnostics] = useState(null);
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
@@ -2149,7 +2182,21 @@ function App() {
       if (res.ok) {
         setUsers([...users, data]);
         setShowAddUser(false);
-        setNewUser({ name: '', role: 'Engineer', password: '' });
+        setNewUser({ 
+          name: '', 
+          role: 'Engineer', 
+          password: '', 
+          preferences: { 
+            allowedSidebarViews: { 
+              locations: true, 
+              installations: true, 
+              loans: true, 
+              shoppingList: true, 
+              printer: true, 
+              transactions: true 
+            } 
+          } 
+        });
         if (!txUser) setTxUser(data.name);
         alert(`User '${data.name}' added successfully!`);
       } else {
@@ -2170,7 +2217,8 @@ function App() {
         body: JSON.stringify({ 
           name: editingUser.name, 
           role: editingUser.role, 
-          password: editingUser.password || '' 
+          password: editingUser.password || '',
+          preferences: editingUser.preferences
         })
       });
       const data = await res.json();
@@ -3248,7 +3296,7 @@ function App() {
             <QrCode size={18} />
             <span>Scan QR Code</span>
           </li>
-          {sidebarVisibility.locations && (
+          {isTabAllowed('locations') && sidebarVisibility.locations && (
             <li 
               className={`nav-item ${currentView === 'locations' ? 'active' : ''}`}
               onClick={() => { setCurrentView('locations'); stopScanner(); }}
@@ -3257,7 +3305,7 @@ function App() {
               <span>Garages & Locations</span>
             </li>
           )}
-          {sidebarVisibility.installations && (
+          {isTabAllowed('installations') && sidebarVisibility.installations && (
             <li 
               className={`nav-item ${currentView === 'installations' ? 'active' : ''}`}
               onClick={() => { setCurrentView('installations'); stopScanner(); }}
@@ -3266,7 +3314,7 @@ function App() {
               <span>Site Installations</span>
             </li>
           )}
-          {sidebarVisibility.loans && (
+          {isTabAllowed('loans') && sidebarVisibility.loans && (
             <li 
               className={`nav-item ${currentView === 'loans' ? 'active' : ''}`}
               onClick={() => { setCurrentView('loans'); stopScanner(); }}
@@ -3275,13 +3323,22 @@ function App() {
               <span>Tool Loans</span>
             </li>
           )}
-          {sidebarVisibility.shoppingList && (
+          {isTabAllowed('shoppingList') && sidebarVisibility.shoppingList && (
             <li 
               className={`nav-item ${currentView === 'shopping-list' ? 'active' : ''}`}
               onClick={() => { setCurrentView('shopping-list'); stopScanner(); }}
             >
               <ShoppingCart size={18} />
               <span>Shopping List</span>
+            </li>
+          )}
+          {isTabAllowed('transactions') && sidebarVisibility.transactions && (
+            <li 
+              className={`nav-item ${currentView === 'transactions' ? 'active' : ''}`}
+              onClick={() => { setCurrentView('transactions'); stopScanner(); }}
+            >
+              <History size={18} />
+              <span>Audit Log</span>
             </li>
           )}
           {isAdmin && (
@@ -3293,7 +3350,7 @@ function App() {
               <span>Team & Users</span>
             </li>
           )}
-          {sidebarVisibility.printer && (
+          {isTabAllowed('printer') && sidebarVisibility.printer && (
             <li 
               className={`nav-item ${currentView === 'printer' ? 'active' : ''}`}
               onClick={() => { setCurrentView('printer'); stopScanner(); }}
@@ -5401,6 +5458,84 @@ function App() {
                       />
                     </div>
 
+                    <div className="form-group">
+                      <label className="form-label" style={{ marginBottom: '8px', display: 'block' }}>Allowed Navigation Views</label>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', background: 'rgba(255,255,255,0.02)', padding: '12px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'white', fontSize: '0.85rem', cursor: 'pointer' }}>
+                          <input 
+                            type="checkbox"
+                            checked={newUser.preferences?.allowedSidebarViews?.locations !== false}
+                            onChange={(e) => {
+                              const allowed = { ...(newUser.preferences?.allowedSidebarViews || {}) };
+                              allowed.locations = e.target.checked;
+                              setNewUser({ ...newUser, preferences: { ...(newUser.preferences || {}), allowedSidebarViews: allowed } });
+                            }}
+                          />
+                          Locations
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'white', fontSize: '0.85rem', cursor: 'pointer' }}>
+                          <input 
+                            type="checkbox"
+                            checked={newUser.preferences?.allowedSidebarViews?.installations !== false}
+                            onChange={(e) => {
+                              const allowed = { ...(newUser.preferences?.allowedSidebarViews || {}) };
+                              allowed.installations = e.target.checked;
+                              setNewUser({ ...newUser, preferences: { ...(newUser.preferences || {}), allowedSidebarViews: allowed } });
+                            }}
+                          />
+                          Installations
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'white', fontSize: '0.85rem', cursor: 'pointer' }}>
+                          <input 
+                            type="checkbox"
+                            checked={newUser.preferences?.allowedSidebarViews?.loans !== false}
+                            onChange={(e) => {
+                              const allowed = { ...(newUser.preferences?.allowedSidebarViews || {}) };
+                              allowed.loans = e.target.checked;
+                              setNewUser({ ...newUser, preferences: { ...(newUser.preferences || {}), allowedSidebarViews: allowed } });
+                            }}
+                          />
+                          Tool Loans
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'white', fontSize: '0.85rem', cursor: 'pointer' }}>
+                          <input 
+                            type="checkbox"
+                            checked={newUser.preferences?.allowedSidebarViews?.shoppingList !== false}
+                            onChange={(e) => {
+                              const allowed = { ...(newUser.preferences?.allowedSidebarViews || {}) };
+                              allowed.shoppingList = e.target.checked;
+                              setNewUser({ ...newUser, preferences: { ...(newUser.preferences || {}), allowedSidebarViews: allowed } });
+                            }}
+                          />
+                          Shopping List
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'white', fontSize: '0.85rem', cursor: 'pointer' }}>
+                          <input 
+                            type="checkbox"
+                            checked={newUser.preferences?.allowedSidebarViews?.transactions !== false}
+                            onChange={(e) => {
+                              const allowed = { ...(newUser.preferences?.allowedSidebarViews || {}) };
+                              allowed.transactions = e.target.checked;
+                              setNewUser({ ...newUser, preferences: { ...(newUser.preferences || {}), allowedSidebarViews: allowed } });
+                            }}
+                          />
+                          Audit Log
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'white', fontSize: '0.85rem', cursor: 'pointer' }}>
+                          <input 
+                            type="checkbox"
+                            checked={newUser.preferences?.allowedSidebarViews?.printer !== false}
+                            onChange={(e) => {
+                              const allowed = { ...(newUser.preferences?.allowedSidebarViews || {}) };
+                              allowed.printer = e.target.checked;
+                              setNewUser({ ...newUser, preferences: { ...(newUser.preferences || {}), allowedSidebarViews: allowed } });
+                            }}
+                          />
+                          Printer
+                        </label>
+                      </div>
+                    </div>
+
                     <div style={{ marginTop: '24px', display: 'flex', gap: '12px' }}>
                       <button type="submit" className="btn btn-primary" style={{ flexGrow: 1 }}>Save User</button>
                       <button type="button" className="btn btn-secondary" onClick={() => setShowAddUser(false)}>Cancel</button>
@@ -5454,6 +5589,84 @@ function App() {
                         value={editingUser.password || ''}
                         onChange={(e) => setEditingUser({ ...editingUser, password: e.target.value })}
                       />
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label" style={{ marginBottom: '8px', display: 'block' }}>Allowed Navigation Views</label>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', background: 'rgba(255,255,255,0.02)', padding: '12px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'white', fontSize: '0.85rem', cursor: 'pointer' }}>
+                          <input 
+                            type="checkbox"
+                            checked={editingUser.preferences?.allowedSidebarViews?.locations !== false}
+                            onChange={(e) => {
+                              const allowed = { ...(editingUser.preferences?.allowedSidebarViews || {}) };
+                              allowed.locations = e.target.checked;
+                              setEditingUser({ ...editingUser, preferences: { ...(editingUser.preferences || {}), allowedSidebarViews: allowed } });
+                            }}
+                          />
+                          Locations
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'white', fontSize: '0.85rem', cursor: 'pointer' }}>
+                          <input 
+                            type="checkbox"
+                            checked={editingUser.preferences?.allowedSidebarViews?.installations !== false}
+                            onChange={(e) => {
+                              const allowed = { ...(editingUser.preferences?.allowedSidebarViews || {}) };
+                              allowed.installations = e.target.checked;
+                              setEditingUser({ ...editingUser, preferences: { ...(editingUser.preferences || {}), allowedSidebarViews: allowed } });
+                            }}
+                          />
+                          Installations
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'white', fontSize: '0.85rem', cursor: 'pointer' }}>
+                          <input 
+                            type="checkbox"
+                            checked={editingUser.preferences?.allowedSidebarViews?.loans !== false}
+                            onChange={(e) => {
+                              const allowed = { ...(editingUser.preferences?.allowedSidebarViews || {}) };
+                              allowed.loans = e.target.checked;
+                              setEditingUser({ ...editingUser, preferences: { ...(editingUser.preferences || {}), allowedSidebarViews: allowed } });
+                            }}
+                          />
+                          Tool Loans
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'white', fontSize: '0.85rem', cursor: 'pointer' }}>
+                          <input 
+                            type="checkbox"
+                            checked={editingUser.preferences?.allowedSidebarViews?.shoppingList !== false}
+                            onChange={(e) => {
+                              const allowed = { ...(editingUser.preferences?.allowedSidebarViews || {}) };
+                              allowed.shoppingList = e.target.checked;
+                              setEditingUser({ ...editingUser, preferences: { ...(editingUser.preferences || {}), allowedSidebarViews: allowed } });
+                            }}
+                          />
+                          Shopping List
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'white', fontSize: '0.85rem', cursor: 'pointer' }}>
+                          <input 
+                            type="checkbox"
+                            checked={editingUser.preferences?.allowedSidebarViews?.transactions !== false}
+                            onChange={(e) => {
+                              const allowed = { ...(editingUser.preferences?.allowedSidebarViews || {}) };
+                              allowed.transactions = e.target.checked;
+                              setEditingUser({ ...editingUser, preferences: { ...(editingUser.preferences || {}), allowedSidebarViews: allowed } });
+                            }}
+                          />
+                          Audit Log
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'white', fontSize: '0.85rem', cursor: 'pointer' }}>
+                          <input 
+                            type="checkbox"
+                            checked={editingUser.preferences?.allowedSidebarViews?.printer !== false}
+                            onChange={(e) => {
+                              const allowed = { ...(editingUser.preferences?.allowedSidebarViews || {}) };
+                              allowed.printer = e.target.checked;
+                              setEditingUser({ ...editingUser, preferences: { ...(editingUser.preferences || {}), allowedSidebarViews: allowed } });
+                            }}
+                          />
+                          Printer
+                        </label>
+                      </div>
                     </div>
 
                     <div style={{ marginTop: '24px', display: 'flex', gap: '12px' }}>
@@ -6257,70 +6470,95 @@ function App() {
                   </p>
                   
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '6px' }}>
-                      <div>
-                        <strong style={{ color: 'white', fontSize: '0.85rem', display: 'block' }}>Garages & Locations</strong>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Display storage garages, vehicles, and areas</span>
+                    {isTabAllowed('locations') && (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '6px' }}>
+                        <div>
+                          <strong style={{ color: 'white', fontSize: '0.85rem', display: 'block' }}>Garages & Locations</strong>
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Display storage garages, vehicles, and areas</span>
+                        </div>
+                        <input 
+                          type="checkbox"
+                          checked={sidebarVisibility.locations}
+                          onChange={(e) => setSidebarVisibility(prev => ({ ...prev, locations: e.target.checked }))}
+                          style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                        />
                       </div>
-                      <input 
-                        type="checkbox"
-                        checked={sidebarVisibility.locations}
-                        onChange={(e) => setSidebarVisibility(prev => ({ ...prev, locations: e.target.checked }))}
-                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-                      />
-                    </div>
+                    )}
 
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '6px' }}>
-                      <div>
-                        <strong style={{ color: 'white', fontSize: '0.85rem', display: 'block' }}>Site Installations</strong>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Track hardware, warranties, and site documents</span>
+                    {isTabAllowed('installations') && (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '6px' }}>
+                        <div>
+                          <strong style={{ color: 'white', fontSize: '0.85rem', display: 'block' }}>Site Installations</strong>
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Track hardware, warranties, and site documents</span>
+                        </div>
+                        <input 
+                          type="checkbox"
+                          checked={sidebarVisibility.installations}
+                          onChange={(e) => setSidebarVisibility(prev => ({ ...prev, installations: e.target.checked }))}
+                          style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                        />
                       </div>
-                      <input 
-                        type="checkbox"
-                        checked={sidebarVisibility.installations}
-                        onChange={(e) => setSidebarVisibility(prev => ({ ...prev, installations: e.target.checked }))}
-                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-                      />
-                    </div>
+                    )}
 
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '6px' }}>
-                      <div>
-                        <strong style={{ color: 'white', fontSize: '0.85rem', display: 'block' }}>Tool Loans</strong>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Temporary tool checkouts to team engineers</span>
+                    {isTabAllowed('loans') && (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '6px' }}>
+                        <div>
+                          <strong style={{ color: 'white', fontSize: '0.85rem', display: 'block' }}>Tool Loans</strong>
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Temporary tool checkouts to team engineers</span>
+                        </div>
+                        <input 
+                          type="checkbox"
+                          checked={sidebarVisibility.loans}
+                          onChange={(e) => setSidebarVisibility(prev => ({ ...prev, loans: e.target.checked }))}
+                          style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                        />
                       </div>
-                      <input 
-                        type="checkbox"
-                        checked={sidebarVisibility.loans}
-                        onChange={(e) => setSidebarVisibility(prev => ({ ...prev, loans: e.target.checked }))}
-                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-                      />
-                    </div>
+                    )}
 
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '6px' }}>
-                      <div>
-                        <strong style={{ color: 'white', fontSize: '0.85rem', display: 'block' }}>Shopping List</strong>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Supplier grouping and printable PO sheets</span>
+                    {isTabAllowed('shoppingList') && (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '6px' }}>
+                        <div>
+                          <strong style={{ color: 'white', fontSize: '0.85rem', display: 'block' }}>Shopping List</strong>
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Supplier grouping and printable PO sheets</span>
+                        </div>
+                        <input 
+                          type="checkbox"
+                          checked={sidebarVisibility.shoppingList}
+                          onChange={(e) => setSidebarVisibility(prev => ({ ...prev, shoppingList: e.target.checked }))}
+                          style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                        />
                       </div>
-                      <input 
-                        type="checkbox"
-                        checked={sidebarVisibility.shoppingList}
-                        onChange={(e) => setSidebarVisibility(prev => ({ ...prev, shoppingList: e.target.checked }))}
-                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-                      />
-                    </div>
+                    )}
 
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '6px' }}>
-                      <div>
-                        <strong style={{ color: 'white', fontSize: '0.85rem', display: 'block' }}>Print Labels</strong>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Batch label printing and QR layouts</span>
+                    {isTabAllowed('transactions') && (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '6px' }}>
+                        <div>
+                          <strong style={{ color: 'white', fontSize: '0.85rem', display: 'block' }}>Audit Log</strong>
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>View history of stock check-ins, withdrawals, and updates</span>
+                        </div>
+                        <input 
+                          type="checkbox"
+                          checked={sidebarVisibility.transactions}
+                          onChange={(e) => setSidebarVisibility(prev => ({ ...prev, transactions: e.target.checked }))}
+                          style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                        />
                       </div>
-                      <input 
-                        type="checkbox"
-                        checked={sidebarVisibility.printer}
-                        onChange={(e) => setSidebarVisibility(prev => ({ ...prev, printer: e.target.checked }))}
-                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-                      />
-                    </div>
+                    )}
+
+                    {isTabAllowed('printer') && (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '6px' }}>
+                        <div>
+                          <strong style={{ color: 'white', fontSize: '0.85rem', display: 'block' }}>Print Labels</strong>
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Batch label printing and QR layouts</span>
+                        </div>
+                        <input 
+                          type="checkbox"
+                          checked={sidebarVisibility.printer}
+                          onChange={(e) => setSidebarVisibility(prev => ({ ...prev, printer: e.target.checked }))}
+                          style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                        />
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -7173,6 +7411,143 @@ function App() {
                 </div>
               );
             })()}
+          </div>
+        )}
+
+        {currentView === 'transactions' && (
+          <div>
+            <div className="page-header">
+              <div className="page-title-group">
+                <h1>Transaction Audit Log</h1>
+                <p>Track history of stock check-ins, withdrawals, and quantity adjustments across all garages.</p>
+              </div>
+            </div>
+
+            {/* Audit Log Filters */}
+            <div className="audit-filters-bar">
+              <div className="audit-filter-item">
+                <label className="form-label" style={{ marginBottom: '6px', fontSize: '0.8rem' }}>Search Logs</label>
+                <input 
+                  type="text" 
+                  className="form-control" 
+                  placeholder="Search asset, operator, notes..."
+                  value={auditSearchQuery}
+                  onChange={(e) => setAuditSearchQuery(e.target.value)}
+                />
+              </div>
+
+              <div className="audit-filter-item">
+                <label className="form-label" style={{ marginBottom: '6px', fontSize: '0.8rem' }}>Action Type</label>
+                <select 
+                  className="form-control"
+                  value={auditTypeFilter}
+                  onChange={(e) => setAuditTypeFilter(e.target.value)}
+                >
+                  <option value="">All Actions</option>
+                  <option value="CHECK_IN">Check-In</option>
+                  <option value="CHECK_OUT">Check-Out / Withdraw</option>
+                  <option value="ADJUSTMENT">Stock Adjustment</option>
+                </select>
+              </div>
+
+              <div className="audit-filter-item">
+                <label className="form-label" style={{ marginBottom: '6px', fontSize: '0.8rem' }}>Location / Garage</label>
+                <select 
+                  className="form-control"
+                  value={auditLocationFilter}
+                  onChange={(e) => setAuditLocationFilter(e.target.value)}
+                >
+                  <option value="">All Locations</option>
+                  <option value="unassigned">Unassigned / System</option>
+                  {locations.map(loc => (
+                    <option key={loc.id} value={loc.id}>{loc.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Transactions Timeline */}
+            <div className="panel">
+              {(() => {
+                const filteredTxs = transactions.filter(tx => {
+                  const q = auditSearchQuery.toLowerCase();
+                  const matchesSearch = !q || 
+                    (tx.asset_name && tx.asset_name.toLowerCase().includes(q)) ||
+                    (tx.asset_id && tx.asset_id.toLowerCase().includes(q)) ||
+                    (tx.user_name && tx.user_name.toLowerCase().includes(q)) ||
+                    (tx.notes && tx.notes.toLowerCase().includes(q));
+
+                  const matchesType = !auditTypeFilter || tx.type === auditTypeFilter;
+
+                  const matchesLocation = !auditLocationFilter || 
+                    (auditLocationFilter === 'unassigned' ? !tx.location_id : String(tx.location_id) === auditLocationFilter);
+
+                  return matchesSearch && matchesType && matchesLocation;
+                });
+
+                if (filteredTxs.length === 0) {
+                  return (
+                    <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>
+                      <History size={40} style={{ color: 'var(--text-muted)', marginBottom: '12px' }} />
+                      <p>No transactions match the selected filters.</p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="transaction-feed">
+                    {filteredTxs.map(tx => {
+                      const assetObj = assets.find(a => a.id === tx.asset_id);
+                      const isCheckIn = tx.type === 'CHECK_IN';
+                      const isCheckOut = tx.type === 'CHECK_OUT';
+                      
+                      return (
+                        <div className="feed-item" key={tx.id}>
+                          <div className={`feed-icon ${isCheckIn ? 'check-in' : isCheckOut ? 'check-out' : 'adjust'}`}>
+                            {isCheckIn ? <ArrowDownLeft size={16} /> : isCheckOut ? <ArrowUpRight size={16} /> : <Sliders size={16} />}
+                          </div>
+                          <div className="feed-details">
+                            <div className="feed-header">
+                              <span className="feed-highlight">{tx.user_name}</span>{' '}
+                              {isCheckIn ? 'checked in' : isCheckOut ? 'checked out' : 'adjusted'}{' '}
+                              <span className="feed-highlight">{Math.abs(tx.quantity_change)} {assetObj?.unit || 'pcs'}</span> of{' '}
+                              {assetObj ? (
+                                <button 
+                                  className="link-button" 
+                                  onClick={() => setActiveAsset(assetObj)}
+                                  style={{ 
+                                    background: 'none', 
+                                    border: 'none', 
+                                    padding: 0, 
+                                    color: 'var(--accent-cyan)', 
+                                    fontWeight: '600', 
+                                    cursor: 'pointer',
+                                    textDecoration: 'underline'
+                                  }}
+                                >
+                                  {tx.asset_name || 'Unknown Item'}
+                                </button>
+                              ) : (
+                                <span className="feed-highlight" style={{ opacity: 0.85 }}>{tx.asset_name || 'Deleted Asset'}</span>
+                              )}{' '}
+                              {tx.location_name && (
+                                <>
+                                  at <span className="feed-highlight">{tx.location_name}</span>
+                                </>
+                              )}
+                            </div>
+                            {tx.notes && <div className="feed-notes">"{tx.notes}"</div>}
+                            <div className="feed-time">
+                              {new Date(tx.created_at).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' })}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
           </div>
         )}
         {/* Form Drawer Modal: Change Password */}

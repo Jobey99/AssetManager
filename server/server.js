@@ -670,19 +670,23 @@ app.post('/api/users', async (req, res) => {
     return res.status(403).json({ error: 'Forbidden: Admin access required' });
   }
   try {
-    const { name, role, password } = req.body;
+    const { name, role, password, preferences } = req.body;
     if (!name || !role) {
       return res.status(400).json({ error: 'name and role are required' });
     }
 
     const defaultPassword = password || (name.toLowerCase() + '123');
     const { salt, hash } = hashPassword(defaultPassword);
+    const prefString = JSON.stringify(preferences || {});
 
     const result = await dbRun(
-      'INSERT INTO users (name, role, password_hash, salt) VALUES (?, ?, ?, ?)',
-      [name, role, hash, salt]
+      'INSERT INTO users (name, role, password_hash, salt, preferences) VALUES (?, ?, ?, ?, ?)',
+      [name, role, hash, salt, prefString]
     );
-    const newUser = await dbGet('SELECT id, name, role, created_at FROM users WHERE id = ?', [result.id]);
+    const newUser = await dbGet('SELECT id, name, role, preferences, created_at FROM users WHERE id = ?', [result.id]);
+    if (newUser) {
+      newUser.preferences = JSON.parse(newUser.preferences || '{}');
+    }
     res.status(201).json(newUser);
   } catch (error) {
     if (error.message.includes('UNIQUE constraint failed')) {
@@ -699,22 +703,39 @@ app.put('/api/users/:id', async (req, res) => {
   }
   try {
     const { id } = req.params;
-    const { name, role, password } = req.body;
+    const { name, role, password, preferences } = req.body;
     if (!name || !role) {
       return res.status(400).json({ error: 'name and role are required' });
     }
 
     if (password) {
       const { salt, hash } = hashPassword(password);
-      await dbRun(
-        'UPDATE users SET name = ?, role = ?, password_hash = ?, salt = ? WHERE id = ?',
-        [name, role, hash, salt, id]
-      );
+      if (preferences !== undefined) {
+        await dbRun(
+          'UPDATE users SET name = ?, role = ?, password_hash = ?, salt = ?, preferences = ? WHERE id = ?',
+          [name, role, hash, salt, JSON.stringify(preferences), id]
+        );
+      } else {
+        await dbRun(
+          'UPDATE users SET name = ?, role = ?, password_hash = ?, salt = ? WHERE id = ?',
+          [name, role, hash, salt, id]
+        );
+      }
     } else {
-      await dbRun('UPDATE users SET name = ?, role = ? WHERE id = ?', [name, role, id]);
+      if (preferences !== undefined) {
+        await dbRun(
+          'UPDATE users SET name = ?, role = ?, preferences = ? WHERE id = ?',
+          [name, role, JSON.stringify(preferences), id]
+        );
+      } else {
+        await dbRun('UPDATE users SET name = ?, role = ? WHERE id = ?', [name, role, id]);
+      }
     }
 
-    const updatedUser = await dbGet('SELECT id, name, role, created_at FROM users WHERE id = ?', [id]);
+    const updatedUser = await dbGet('SELECT id, name, role, preferences, created_at FROM users WHERE id = ?', [id]);
+    if (updatedUser) {
+      updatedUser.preferences = JSON.parse(updatedUser.preferences || '{}');
+    }
     res.json(updatedUser);
   } catch (error) {
     if (error.message.includes('UNIQUE constraint failed')) {
